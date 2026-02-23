@@ -82,9 +82,9 @@ verify_clean_system() {
 test_add_gpg_key() {
     section "Test: Add GPG Key"
 
-    info "Downloading GPG key from repo.cxlinux-ai.com..."
+    info "Downloading GPG key from repo.cxlinux.com..."
 
-    if curl -fsSL https://repo.cxlinux-ai.com/pub.gpg | gpg --dearmor -o /usr/share/keyrings/cx-archive-keyring.gpg 2>&1 | tee -a "$LOG_FILE"; then
+    if curl -fsSL https://repo.cxlinux.com/key.gpg | gpg --dearmor -o /usr/share/keyrings/cx-archive-keyring.gpg 2>&1 | tee -a "$LOG_FILE"; then
         pass "GPG key downloaded and installed"
     else
         fail "Failed to download/install GPG key"
@@ -104,7 +104,7 @@ test_add_gpg_key() {
 test_add_repository() {
     section "Test: Add APT Repository"
 
-    local repo_line="deb [signed-by=/usr/share/keyrings/cx-archive-keyring.gpg] https://repo.cxlinux-ai.com cx main"
+    local repo_line="deb [signed-by=/usr/share/keyrings/cx-archive-keyring.gpg] https://repo.cxlinux.com/apt stable main"
 
     echo "$repo_line" > /etc/apt/sources.list.d/cx.list
 
