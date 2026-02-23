@@ -72,10 +72,10 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/cxlinux.list
           sudo apt update
 
-      - name: Install cx-core
+      - name: Install cx-terminal
         run: |
-          echo "=== Installing cx-core ==="
-          sudo apt install -y cx-core
+          echo "=== Installing cx-terminal ==="
+          sudo apt install -y cx-terminal
           dpkg -l | grep cx-
 
       - name: Verify Installation
@@ -163,10 +163,10 @@ jobs:
             > /etc/apt/sources.list.d/cxlinux.list
           apt-get update
 
-      - name: Install cx-core
+      - name: Install cx-terminal
         run: |
-          echo "=== Installing cx-core ==="
-          apt-get install -y cx-core || echo "Package not yet available"
+          echo "=== Installing cx-terminal ==="
+          apt-get install -y cx-terminal || echo "Package not yet available"
           dpkg -l | grep cx- || echo "No cx packages (not yet published)"
 
       - name: Verify Installation
@@ -207,21 +207,21 @@ jobs:
       - name: Install Current Version
         run: |
           echo "=== Installing current version ==="
-          sudo apt install -y cx-core || echo "Package not yet available"
+          sudo apt install -y cx-terminal || echo "Package not yet available"
 
-          CURRENT=$(dpkg -l cx-core 2>/dev/null | grep "^ii" | awk '{print $3}' || echo "none")
+          CURRENT=$(dpkg -l cx-terminal 2>/dev/null | grep "^ii" | awk '{print $3}' || echo "none")
           echo "Installed version: $CURRENT"
 
       - name: Test Upgrade
         run: |
           echo "=== Testing upgrade ==="
           sudo apt update
-          AVAILABLE=$(apt-cache policy cx-core 2>/dev/null | grep "Candidate:" | awk '{print $2}' || echo "none")
+          AVAILABLE=$(apt-cache policy cx-terminal 2>/dev/null | grep "Candidate:" | awk '{print $2}' || echo "none")
           echo "Available version: $AVAILABLE"
 
           # Upgrade if available
           if [ "$AVAILABLE" != "none" ]; then
-            sudo apt upgrade -y cx-core
+            sudo apt upgrade -y cx-terminal
             echo "Upgrade complete"
           else
             echo "No upgrade available"
@@ -230,7 +230,7 @@ jobs:
       - name: Verify Upgrade
         run: |
           echo "=== Verifying upgrade ==="
-          dpkg -l cx-core || echo "Package not installed"
+          dpkg -l cx-terminal || echo "Package not installed"
 
   # Full vs Minimal comparison
   package-comparison:
@@ -253,18 +253,18 @@ jobs:
 
       - name: Measure Minimal Install
         run: |
-          echo "=== Minimal (cx-core) Installation ==="
+          echo "=== Minimal (cx-terminal) Installation ==="
           BEFORE=$(df / --output=used | tail -1)
-          sudo apt install -y cx-core || echo "Package not available"
+          sudo apt install -y cx-terminal || echo "Package not available"
           AFTER=$(df / --output=used | tail -1)
 
           CORE_SIZE=$((AFTER - BEFORE))
-          echo "cx-core disk usage: ${CORE_SIZE}KB"
+          echo "cx-terminal disk usage: ${CORE_SIZE}KB"
           echo "CORE_SIZE=${CORE_SIZE}" >> $GITHUB_ENV
 
           # Count dependencies
-          CORE_DEPS=$(apt-cache depends cx-core 2>/dev/null | grep -c "Depends:" || echo "0")
-          echo "cx-core dependencies: $CORE_DEPS"
+          CORE_DEPS=$(apt-cache depends cx-terminal 2>/dev/null | grep -c "Depends:" || echo "0")
+          echo "cx-terminal dependencies: $CORE_DEPS"
 
       - name: Measure Full Install
         run: |
@@ -283,12 +283,12 @@ jobs:
       - name: Compare Packages
         run: |
           echo "=== Package Comparison ==="
-          echo "cx-core: Minimal installation for core functionality"
+          echo "cx-terminal: Minimal installation for core functionality"
           echo "cx-full: Complete installation with all tools"
 
           # List package differences
           echo ""
-          echo "Packages in cx-full but not cx-core:"
+          echo "Packages in cx-full but not cx-terminal:"
           apt-cache depends cx-full 2>/dev/null | grep "Depends:" | sort || true
 
   # Signing verification
