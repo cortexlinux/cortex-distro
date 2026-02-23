@@ -59,7 +59,7 @@ jobs:
       - name: Add GPG Key
         run: |
           echo "=== Adding CX Linux GPG Key ==="
-          curl -fsSL https://repo.cxlinux-ai.com/pub.gpg \
+          curl -fsSL https://repo.cxlinux.com/key.gpg \
             | sudo gpg --dearmor -o /usr/share/keyrings/cx-archive-keyring.gpg
           gpg --no-default-keyring \
             --keyring /usr/share/keyrings/cx-archive-keyring.gpg \
@@ -68,7 +68,7 @@ jobs:
       - name: Add Repository
         run: |
           echo "=== Adding CX Linux Repository ==="
-          echo "deb [signed-by=/usr/share/keyrings/cx-archive-keyring.gpg] https://repo.cxlinux.ai cx main" \
+          echo "deb [signed-by=/usr/share/keyrings/cx-archive-keyring.gpg] https://repo.cxlinux.com/apt stable main" \
             | sudo tee /etc/apt/sources.list.d/cxlinux.list
           sudo apt update
 
@@ -150,7 +150,7 @@ jobs:
       - name: Add GPG Key
         run: |
           echo "=== Adding CX Linux GPG Key ==="
-          curl -fsSL https://repo.cxlinux-ai.com/pub.gpg \
+          curl -fsSL https://repo.cxlinux.com/key.gpg \
             | gpg --dearmor -o /usr/share/keyrings/cx-archive-keyring.gpg
           gpg --no-default-keyring \
             --keyring /usr/share/keyrings/cx-archive-keyring.gpg \
@@ -159,7 +159,7 @@ jobs:
       - name: Add Repository
         run: |
           echo "=== Adding CX Linux Repository ==="
-          echo "deb [signed-by=/usr/share/keyrings/cx-archive-keyring.gpg] https://repo.cxlinux.ai cx main" \
+          echo "deb [signed-by=/usr/share/keyrings/cx-archive-keyring.gpg] https://repo.cxlinux.com/apt stable main" \
             > /etc/apt/sources.list.d/cxlinux.list
           apt-get update
 
@@ -198,9 +198,9 @@ jobs:
 
       - name: Setup Repository
         run: |
-          curl -fsSL https://repo.cxlinux-ai.com/pub.gpg \
+          curl -fsSL https://repo.cxlinux.com/key.gpg \
             | sudo gpg --dearmor -o /usr/share/keyrings/cx-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/cx-archive-keyring.gpg] https://repo.cxlinux.ai cx main" \
+          echo "deb [signed-by=/usr/share/keyrings/cx-archive-keyring.gpg] https://repo.cxlinux.com/apt stable main" \
             | sudo tee /etc/apt/sources.list.d/cxlinux.list
           sudo apt update
 
@@ -245,9 +245,9 @@ jobs:
 
       - name: Setup Repository
         run: |
-          curl -fsSL https://repo.cxlinux-ai.com/pub.gpg \
+          curl -fsSL https://repo.cxlinux.com/key.gpg \
             | sudo gpg --dearmor -o /usr/share/keyrings/cx-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/cx-archive-keyring.gpg] https://repo.cxlinux.ai cx main" \
+          echo "deb [signed-by=/usr/share/keyrings/cx-archive-keyring.gpg] https://repo.cxlinux.com/apt stable main" \
             | sudo tee /etc/apt/sources.list.d/cxlinux.list
           sudo apt update
 
@@ -304,7 +304,7 @@ jobs:
       - name: Download and Verify Key
         run: |
           echo "=== Downloading GPG Key ==="
-          curl -fsSL -o /tmp/cxlinux.gpg https://repo.cxlinux-ai.com/pub.gpg
+          curl -fsSL -o /tmp/cxlinux.gpg https://repo.cxlinux.com/key.gpg
 
           echo "=== Key Information ==="
           gpg --show-keys /tmp/cxlinux.gpg
@@ -318,8 +318,8 @@ jobs:
           gpg --dearmor -o /tmp/cxlinux-keyring.gpg /tmp/cxlinux.gpg
 
           echo "=== Checking Release File ==="
-          curl -fsSL -o /tmp/Release https://repo.cxlinux-ai.com/dists/cx/Release || echo "Release file not found"
-          curl -fsSL -o /tmp/Release.gpg https://repo.cxlinux-ai.com/dists/cx/Release.gpg || echo "Release.gpg not found"
+          curl -fsSL -o /tmp/Release https://repo.cxlinux.com/apt/dists/stable/Release || echo "Release file not found"
+          curl -fsSL -o /tmp/Release.gpg https://repo.cxlinux.com/apt/dists/stable/Release.gpg || echo "Release.gpg not found"
 
           if [ -f /tmp/Release ] && [ -f /tmp/Release.gpg ]; then
             gpg --no-default-keyring --keyring /tmp/cxlinux-keyring.gpg --verify /tmp/Release.gpg /tmp/Release
