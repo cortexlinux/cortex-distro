@@ -151,12 +151,12 @@ sudo /tmp/test.sh
 1. **GPU Tests** - Require actual GPU hardware, cannot run in standard VMs
 2. **Offline ISO** - Requires pre-built ISO file
 3. **Signature Tests** - Require published repository with signed Release files
-4. **Package Availability** - Tests may show "not available" until packages are published to repo.cxlinux-ai.com
+4. **Package Availability** - Tests may show "not available" until packages are published to repo.cxlinux.com/apt
 
 ## Current Status
 
 **Repository Status:** NOT YET DEPLOYED
-- `repo.cxlinux-ai.com` is not resolving (DNS not configured or GitHub Pages not enabled)
+- `repo.cxlinux.com/apt` is not resolving (DNS not configured or GitHub Pages not enabled)
 - APT repository at `https://github.com/cxlinux-ai/apt-repo` exists but not deployed
 
 **Pre-deployment Testing:**
@@ -166,7 +166,7 @@ sudo /tmp/test.sh
 
 **To Deploy Repository:**
 1. Enable GitHub Pages on `apt-repo` repository (Settings → Pages → Deploy from branch: `deploy`)
-2. Configure DNS CNAME: `repo.cxlinux-ai.com` → `cxlinux-ai.github.io`
+2. Configure DNS CNAME: `repo.cxlinux.com/apt` → `cxlinux-ai.github.io`
 3. Build packages: `cd cx-distro && make packages`
 4. Add packages to repo: `cd apt-repo && reprepro -b . includedeb cx ../cx-distro/*.deb`
 5. Sign and push: `git add . && git commit -m "Add packages" && git push`
