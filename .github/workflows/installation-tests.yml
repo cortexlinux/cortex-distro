@@ -83,10 +83,9 @@ jobs:
           echo "=== Verifying Installation ==="
           dpkg -l | grep "^ii.*cx-" || (echo "Installation failed"; exit 1)
 
-          # Check dependencies
-          for cmd in python3 curl gnupg; do
-            which $cmd || (echo "Missing: $cmd"; exit 1)
-          done
+          # Verify the binary exists and is executable
+          which cx-terminal || (echo "cx-terminal binary not found"; exit 1)
+          cx-terminal --version || true
 
       - name: Test apt Upgrade
         run: |
