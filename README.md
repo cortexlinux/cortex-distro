@@ -130,7 +130,7 @@ CX uses a signed APT repository with deb822 format:
 ```
 # /etc/apt/sources.list.d/cx.sources
 Types: deb
-URIs: https://repo.cxlinux.com/apt/apt
+URIs: https://repo.cxlinux.com/apt
 Suites: cx cx-updates cx-security
 Components: main
 Signed-By: /usr/share/keyrings/cx-archive-keyring.gpg
