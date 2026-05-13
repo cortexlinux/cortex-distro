@@ -62,9 +62,17 @@ output="$("$ROOT_DIR/apt/scripts/suggest-alternatives.py" --index "$INDEX.gz" cu
 assert_contains "$output" "cx-gpu-nvidia"
 
 json_output="$("$ROOT_DIR/apt/scripts/suggest-alternatives.py" --index "$INDEX" --json apache-server)"
-assert_contains "$json_output" '"available": false'
-assert_contains "$json_output" '"package": "apache2"'
-python3 -m json.tool <<< "$json_output" > /dev/null
+python3 - "$json_output" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+assert payload.get("available") is False, payload
+assert any(
+    suggestion.get("package") == "apache2"
+    for suggestion in payload.get("suggestions", [])
+), payload
+PY
 
 output="$(run_suggest no-such-package)"
 assert_contains "$output" "No close alternatives found"
@@ -74,5 +82,16 @@ if "$ROOT_DIR/apt/scripts/suggest-alternatives.py" --index "$TMP_DIR/missing" ap
     exit 1
 fi
 assert_contains "$(cat "$TMP_DIR/missing.err")" "package index not found"
+
+BAD_INDEX="$TMP_DIR/BadPackages"
+cat > "$BAD_INDEX" <<'EOF'
+Version: 1.0.0
+Description: invalid stanza without a package name
+EOF
+if "$ROOT_DIR/apt/scripts/suggest-alternatives.py" --index "$BAD_INDEX" apache-server 2> "$TMP_DIR/bad.err"; then
+    echo "Expected malformed package index to fail" >&2
+    exit 1
+fi
+assert_contains "$(cat "$TMP_DIR/bad.err")" "missing Package field in stanza"
 
 echo "suggest-alternatives-test.sh: all assertions passed"

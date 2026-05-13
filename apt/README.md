@@ -83,20 +83,20 @@ git push
 
 ## Alternative Package Suggestions
 
-Use `apt/scripts/suggest-alternatives.py` before install flows or support docs
+Use `scripts/suggest-alternatives.py` before install flows or support docs
 return a plain "package not found" error. The helper reads generated Debian
 `Packages` indexes, detects whether the requested package is unavailable, and
 then ranks compatible alternatives with short feature notes.
 
 ```bash
 # Search generated repository indexes under dists/
-./apt/scripts/suggest-alternatives.py apache-server
+./scripts/suggest-alternatives.py apache-server
 
 # Search a specific Packages index
-./apt/scripts/suggest-alternatives.py --index dists/stable/main/binary-amd64/Packages apache-server
+./scripts/suggest-alternatives.py --index dists/stable/main/binary-amd64/Packages apache-server
 
 # Emit JSON for future UI or installer integration
-./apt/scripts/suggest-alternatives.py --json apache-server
+./scripts/suggest-alternatives.py --json apache-server
 ```
 
 Example output:

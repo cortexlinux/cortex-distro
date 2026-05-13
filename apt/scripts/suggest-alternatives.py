@@ -143,8 +143,12 @@ def parse_packages_index(path: Path) -> list[Package]:
 
 
 def package_from_fields(fields: dict[str, str]) -> Package:
+    package_name = fields.get("Package")
+    if not package_name:
+        raise ValueError("missing Package field in stanza")
+
     return Package(
-        name=fields.get("Package", ""),
+        name=package_name,
         version=fields.get("Version", ""),
         description=fields.get("Description", ""),
         fields=dict(fields),
