@@ -81,6 +81,51 @@ git commit -m "Add mypackage 1.0.0"
 git push
 ```
 
+## Alternative Package Suggestions
+
+Use `apt/scripts/suggest-alternatives.py` before install flows or support docs
+return a plain "package not found" error. The helper reads generated Debian
+`Packages` indexes, detects whether the requested package is unavailable, and
+then ranks compatible alternatives with short feature notes.
+
+```bash
+# Search generated repository indexes under dists/
+./apt/scripts/suggest-alternatives.py apache-server
+
+# Search a specific Packages index
+./apt/scripts/suggest-alternatives.py --index dists/stable/main/binary-amd64/Packages apache-server
+
+# Emit JSON for future UI or installer integration
+./apt/scripts/suggest-alternatives.py --json apache-server
+```
+
+Example output:
+
+```text
+Package 'apache-server' was not found.
+
+Did you mean:
+  1. apache2 (2.4.58-1)
+     compatibility=recommended score=135
+     reason=shared package terms; web-server alternative; description overlap
+     features=drop-in Apache HTTP Server package on Debian-compatible systems
+  2. nginx (1.24.0-1)
+     compatibility=recommended score=125
+     reason=shared package terms; web-server alternative; description overlap
+     features=modern reverse proxy and static web server alternative
+```
+
+The current implementation is deterministic and offline so it can run safely in
+repository tooling. The JSON output is intended as the integration point for a
+future LLM layer if CX Linux wants generated explanations on top of the ranked
+package data.
+
+Run the focused test suite with:
+
+```bash
+make test-suggestions
+```
+
 ### Method 2: Workflow dispatch
 
 Go to Actions → Publish APT Repository → Run workflow
