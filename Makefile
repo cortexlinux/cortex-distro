@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 SHELL := /bin/bash
-.PHONY: all iso iso-netinst iso-offline package sbom clean test help
+.PHONY: all iso iso-netinst iso-offline package sbom clean test test-search help
 
 # Build configuration
 CODENAME := trixie
@@ -37,6 +37,7 @@ help:
 	@echo "  package PKG=x Build specific package (cx-core, cx-full, cx-archive-keyring)"
 	@echo "  sbom          Generate Software Bill of Materials"
 	@echo "  test          Run build verification tests"
+	@echo "  test-search   Run package search helper tests"
 	@echo "  clean         Remove build artifacts"
 	@echo "  deps          Install build dependencies"
 	@echo ""
@@ -161,6 +162,10 @@ test:
 	./tests/verify-packages.sh || true
 	./tests/verify-preseed.sh || true
 	@echo -e "$(GREEN)Tests complete$(NC)"
+
+test-search:
+	@echo -e "$(GREEN)Running package search tests...$(NC)"
+	./tests/search-packages-test.sh
 
 # Clean build artifacts
 clean:
