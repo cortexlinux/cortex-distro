@@ -28,9 +28,18 @@ Package: cx-gpu-nvidia
 Version: 0.1.0-1
 Description: NVIDIA GPU runtime helpers for CX Linux
 EOF
+gzip -c "$INDEX" > "$INDEX.gz"
+
+mkdir -p "$TMP_DIR/repo/dists/stable/main/binary-amd64"
+cp "$INDEX" "$TMP_DIR/repo/dists/stable/main/binary-amd64/Packages"
+cp "$INDEX.gz" "$TMP_DIR/repo/dists/stable/main/binary-amd64/Packages.gz"
 
 run_search() {
     "$ROOT_DIR/apt/scripts/search-packages.py" --index "$INDEX" "$@"
+}
+
+run_repo_search() {
+    "$ROOT_DIR/apt/scripts/search-packages.py" --repo-root "$TMP_DIR/repo" "$@"
 }
 
 assert_contains() {
@@ -55,8 +64,22 @@ assert_contains "$output" "apache2"
 output="$(run_search "graphics card")"
 assert_contains "$output" "cx-gpu-nvidia"
 
+output="$(run_search "grafics card")"
+assert_contains "$output" "cx-gpu-nvidia"
+
 output="$(run_search hardening)"
 assert_contains "$output" "cx-secops"
+
+output="$("$ROOT_DIR/apt/scripts/search-packages.py" --index "$INDEX.gz" "web server")"
+assert_contains "$output" "nginx"
+
+output="$(run_repo_search postgresql)"
+postgres_count="$(grep -c "^  [0-9][.] postgresql " <<< "$output")"
+if [[ "$postgres_count" -ne 1 ]]; then
+    echo "Expected repo-root search to dedupe Packages and Packages.gz" >&2
+    echo "$output" >&2
+    exit 1
+fi
 
 output="$(run_search "not-a-real-package")"
 assert_contains "$output" "No matching packages found."

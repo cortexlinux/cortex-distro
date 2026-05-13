@@ -19,6 +19,8 @@ SYNONYMS = {
     "web": {"web", "http", "server", "nginx", "apache", "caddy"},
 }
 
+SYNONYM_ALIASES = {alias for aliases in SYNONYMS.values() for alias in aliases}
+
 
 @dataclass(frozen=True)
 class Package:
@@ -70,8 +72,18 @@ def expanded_query_terms(query: str) -> set[str]:
     query_terms = tokens(query)
     expanded = set(query_terms)
     for term in query_terms:
+        closest_alias = min(SYNONYM_ALIASES, key=lambda alias: levenshtein(term, alias), default="")
+        fuzzy_alias = (
+            closest_alias
+            and len(term) >= 4
+            and term[0] == closest_alias[0]
+            and levenshtein(term, closest_alias) <= 2
+        )
+        if fuzzy_alias:
+            expanded.add(closest_alias)
+
         for group in SYNONYMS.values():
-            if term in group:
+            if term in group or (fuzzy_alias and closest_alias in group):
                 expanded.update(group)
     return expanded
 
@@ -178,7 +190,13 @@ def default_index_paths(repo_root: Path) -> list[Path]:
     dists = repo_root / "dists"
     if not dists.exists():
         return []
-    return sorted(dists.glob("**/Packages")) + sorted(dists.glob("**/Packages.gz"))
+
+    plain_indexes = sorted(dists.glob("**/Packages"))
+    plain_dirs = {path.parent for path in plain_indexes}
+    gzip_only_indexes = sorted(
+        path for path in dists.glob("**/Packages.gz") if path.parent not in plain_dirs
+    )
+    return plain_indexes + gzip_only_indexes
 
 
 def load_packages(repo_root: Path, indexes: list[Path]) -> list[Package]:
