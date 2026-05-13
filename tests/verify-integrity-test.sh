@@ -73,11 +73,16 @@ GOOD_REPO="$TMP_DIR/good"
 BAD_REPO="$TMP_DIR/bad"
 MISSING_REPO="$TMP_DIR/missing"
 UNSAFE_REPO="$TMP_DIR/unsafe"
+SIGNED_REPO="$TMP_DIR/signed"
+BAD_SIGNATURE_REPO="$TMP_DIR/bad-signature"
+ARMORED_KEY="$TMP_DIR/integrity-test.asc"
 
 build_fixture "$GOOD_REPO"
 cp -R "$GOOD_REPO" "$BAD_REPO"
 cp -R "$GOOD_REPO" "$MISSING_REPO"
 cp -R "$GOOD_REPO" "$UNSAFE_REPO"
+cp -R "$GOOD_REPO" "$SIGNED_REPO"
+cp -R "$GOOD_REPO" "$BAD_SIGNATURE_REPO"
 
 printf 'tampered payload\n' > "$BAD_REPO/pool/main/c/cx/cx-test_1.0.0_all.deb"
 rm "$MISSING_REPO/pool/main/c/cx/cx-test_1.0.0_all.deb"
@@ -90,8 +95,39 @@ SHA256: 0000000000000000000000000000000000000000000000000000000000000000
 
 EOF
 
+if command -v gpg >/dev/null 2>&1 && command -v gpgv >/dev/null 2>&1; then
+    GNUPGHOME="$TMP_DIR/gnupg"
+    export GNUPGHOME
+    mkdir -p "$GNUPGHOME"
+    chmod 700 "$GNUPGHOME"
+
+    cat > "$TMP_DIR/gpg-batch" <<'EOF'
+%no-protection
+Key-Type: RSA
+Key-Length: 2048
+Name-Real: CX Integrity Test
+Name-Email: integrity-test@example.invalid
+Expire-Date: 0
+%commit
+EOF
+
+    gpg --batch --generate-key "$TMP_DIR/gpg-batch" >/dev/null 2>&1
+    gpg --batch --armor --export integrity-test@example.invalid > "$ARMORED_KEY"
+    gpg --batch --yes --armor --detach-sign \
+        --output "$SIGNED_REPO/dists/stable/Release.gpg" \
+        "$SIGNED_REPO/dists/stable/Release" >/dev/null 2>&1
+    cp "$SIGNED_REPO/dists/stable/Release.gpg" "$BAD_SIGNATURE_REPO/dists/stable/Release.gpg"
+    printf '\nTampered: yes\n' >> "$BAD_SIGNATURE_REPO/dists/stable/Release"
+else
+    printf 'SKIP signature fixtures require gpg and gpgv\n'
+fi
+
 assert_success "valid-checksum" "$SCRIPT" "$GOOD_REPO"
 assert_failure "tampered-package" "$SCRIPT" "$BAD_REPO"
 assert_failure "missing-package" "$SCRIPT" "$MISSING_REPO"
 assert_failure "unsafe-path-rejected" "$SCRIPT" "$UNSAFE_REPO"
 assert_failure "missing-keyring" "$SCRIPT" --keyring "$TMP_DIR/missing.gpg" "$GOOD_REPO"
+if [[ -f "$ARMORED_KEY" ]]; then
+    assert_success "valid-signature-armored-key" "$SCRIPT" --keyring "$ARMORED_KEY" "$SIGNED_REPO"
+    assert_failure "bad-signature-rejected" "$SCRIPT" --keyring "$ARMORED_KEY" "$BAD_SIGNATURE_REPO"
+fi

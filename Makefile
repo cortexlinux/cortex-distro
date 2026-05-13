@@ -165,7 +165,7 @@ test:
 
 test-integrity:
 	@echo -e "$(GREEN)Running package integrity verifier tests...$(NC)"
-	bash ./tests/verify-integrity-test.sh
+	./tests/verify-integrity-test.sh
 	@echo -e "$(GREEN)Integrity verifier tests complete$(NC)"
 
 # Clean build artifacts

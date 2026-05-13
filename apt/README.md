@@ -145,13 +145,16 @@ Use `scripts/verify-integrity.sh` to validate repository metadata and package
 artifacts before publishing or after downloading a repository snapshot.
 
 ```bash
-# Verify package checksums from Packages indexes
-./scripts/verify-integrity.sh .
-
-# Also verify Release.gpg and InRelease signatures with the public key.
+# Verify Release.gpg / InRelease signatures and package checksums.
 # ASCII-armored keys are dearmored into a temporary gpgv keyring automatically.
 ./scripts/verify-integrity.sh --keyring deploy/pub.gpg .
+
+# Check package artifacts only when no trusted public key is available.
+./scripts/verify-integrity.sh .
 ```
+
+Without `--keyring`, verification is limited to artifact checksums and package
+paths; it does not prove the repository metadata source or trust chain.
 
 The verifier reports:
 
