@@ -8,6 +8,7 @@ import gzip
 import re
 import sys
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -37,6 +38,13 @@ class SearchResult:
     reason: str
 
 
+@dataclass(frozen=True)
+class QueryContext:
+    normalized: str
+    tokens: set[str]
+    expanded_terms: set[str]
+
+
 def normalize(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
 
@@ -45,6 +53,7 @@ def tokens(value: str) -> set[str]:
     return {token for token in normalize(value).split() if token}
 
 
+@lru_cache(maxsize=4096)
 def levenshtein(a: str, b: str) -> int:
     if a == b:
         return 0
@@ -68,8 +77,7 @@ def levenshtein(a: str, b: str) -> int:
     return previous[-1]
 
 
-def expanded_query_terms(query: str) -> set[str]:
-    query_terms = tokens(query)
+def expanded_query_terms(query_terms: set[str]) -> set[str]:
     expanded = set(query_terms)
     for term in query_terms:
         closest_alias = min(SYNONYM_ALIASES, key=lambda alias: levenshtein(term, alias), default="")
@@ -86,6 +94,15 @@ def expanded_query_terms(query: str) -> set[str]:
             if term in group or (fuzzy_alias and closest_alias in group):
                 expanded.update(group)
     return expanded
+
+
+def build_query_context(query: str) -> QueryContext:
+    query_tokens = tokens(query)
+    return QueryContext(
+        normalized=normalize(query),
+        tokens=query_tokens,
+        expanded_terms=expanded_query_terms(query_tokens),
+    )
 
 
 def open_index(path: Path):
@@ -133,36 +150,34 @@ def package_from_fields(fields: dict[str, str]) -> Package:
     )
 
 
-def score_package(package: Package, query: str) -> SearchResult | None:
-    query_norm = normalize(query)
-    query_terms = expanded_query_terms(query)
+def score_package(package: Package, query: QueryContext) -> SearchResult | None:
     name_norm = normalize(package.name)
     package_terms = tokens(f"{package.name} {package.description}")
 
     score = 0
     reasons: list[str] = []
 
-    if query_norm == name_norm:
+    if query.normalized == name_norm:
         score += 100
         reasons.append("exact name")
-    elif query_norm in name_norm:
+    elif query.normalized in name_norm:
         score += 75
         reasons.append("name contains query")
 
-    overlap = query_terms & package_terms
+    overlap = query.expanded_terms & package_terms
     if overlap:
         score += 12 * len(overlap)
         reasons.append("matched " + ", ".join(sorted(overlap)[:4]))
 
     closest_distance = min(
-        (levenshtein(term, package.name) for term in tokens(query)),
+        (levenshtein(term, package.name) for term in query.tokens),
         default=99,
     )
     if closest_distance <= 2:
         score += 45 - (closest_distance * 10)
         reasons.append("fuzzy name")
 
-    for query_term in tokens(query):
+    for query_term in query.tokens:
         if len(query_term) < 4:
             continue
         for package_term in package_terms:
@@ -182,7 +197,8 @@ def score_package(package: Package, query: str) -> SearchResult | None:
 
 
 def search(packages: list[Package], query: str, limit: int) -> list[SearchResult]:
-    results = [result for package in packages if (result := score_package(package, query))]
+    query_context = build_query_context(query)
+    results = [result for package in packages if (result := score_package(package, query_context))]
     return sorted(results, key=lambda result: (-result.score, result.package.name))[:limit]
 
 
