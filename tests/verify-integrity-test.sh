@@ -72,14 +72,26 @@ EOF
 GOOD_REPO="$TMP_DIR/good"
 BAD_REPO="$TMP_DIR/bad"
 MISSING_REPO="$TMP_DIR/missing"
+UNSAFE_REPO="$TMP_DIR/unsafe"
 
 build_fixture "$GOOD_REPO"
 cp -R "$GOOD_REPO" "$BAD_REPO"
 cp -R "$GOOD_REPO" "$MISSING_REPO"
+cp -R "$GOOD_REPO" "$UNSAFE_REPO"
 
 printf 'tampered payload\n' > "$BAD_REPO/pool/main/c/cx/cx-test_1.0.0_all.deb"
 rm "$MISSING_REPO/pool/main/c/cx/cx-test_1.0.0_all.deb"
+cat > "$UNSAFE_REPO/dists/stable/main/binary-amd64/Packages" <<'EOF'
+Package: cx-malicious
+Version: 1.0.0
+Architecture: all
+Filename: ../../../../etc/passwd
+SHA256: 0000000000000000000000000000000000000000000000000000000000000000
+
+EOF
 
 assert_success "valid-checksum" "$SCRIPT" "$GOOD_REPO"
 assert_failure "tampered-package" "$SCRIPT" "$BAD_REPO"
 assert_failure "missing-package" "$SCRIPT" "$MISSING_REPO"
+assert_failure "unsafe-path-rejected" "$SCRIPT" "$UNSAFE_REPO"
+assert_failure "missing-keyring" "$SCRIPT" --keyring "$TMP_DIR/missing.gpg" "$GOOD_REPO"

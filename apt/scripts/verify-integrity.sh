@@ -6,7 +6,7 @@
 #
 # Usage:
 #   ./apt/scripts/verify-integrity.sh [repo-root]
-#   ./apt/scripts/verify-integrity.sh --keyring /path/to/pub.gpg [repo-root]
+#   ./apt/scripts/verify-integrity.sh --keyring /path/to/keyring.gpg [repo-root]
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,6 +14,15 @@ set -euo pipefail
 
 KEYRING=""
 REPO_ROOT=""
+TEMP_KEYRING=""
+TRUSTED_KEYRING=""
+
+cleanup() {
+    if [[ -n "$TEMP_KEYRING" ]]; then
+        rm -f "$TEMP_KEYRING"
+    fi
+}
+trap cleanup EXIT
 
 usage() {
     cat <<'EOF'
@@ -30,7 +39,8 @@ Arguments:
                      Defaults to the parent of this script's directory.
 
 Options:
-  --keyring PATH     Public GPG keyring or armored key used for signature checks.
+  --keyring PATH     Public GPG keyring used for signature checks. ASCII-armored
+                     public keys are dearmored into a temporary keyring first.
   -h, --help         Show this help text.
 EOF
 }
@@ -100,6 +110,38 @@ warn() {
     WARN=$((WARN + 1))
 }
 
+normalize_keyring() {
+    if [[ -z "$KEYRING" ]]; then
+        return 0
+    fi
+
+    if [[ -n "$TRUSTED_KEYRING" ]]; then
+        return 0
+    fi
+
+    if [[ ! -f "$KEYRING" ]]; then
+        fail "keyring not found: $KEYRING"
+        return 1
+    fi
+
+    if grep -q -- "-----BEGIN PGP PUBLIC KEY BLOCK-----" "$KEYRING"; then
+        if ! command -v gpg >/dev/null 2>&1; then
+            fail "armored key requires gpg for dearmor: $KEYRING"
+            return 1
+        fi
+
+        TEMP_KEYRING="$(mktemp)"
+        if gpg --batch --dearmor < "$KEYRING" > "$TEMP_KEYRING" 2>/dev/null; then
+            TRUSTED_KEYRING="$TEMP_KEYRING"
+        else
+            fail "failed to dearmor keyring: $KEYRING"
+            return 1
+        fi
+    else
+        TRUSTED_KEYRING="$KEYRING"
+    fi
+}
+
 verify_signature() {
     local release_file="$1"
     local dist_dir
@@ -110,13 +152,12 @@ verify_signature() {
         return
     fi
 
-    if [[ ! -f "$KEYRING" ]]; then
-        fail "keyring not found: $KEYRING"
+    if ! normalize_keyring; then
         return
     fi
 
     if [[ -f "$dist_dir/Release.gpg" ]]; then
-        if gpgv --keyring "$KEYRING" "$dist_dir/Release.gpg" "$release_file" >/dev/null 2>&1; then
+        if gpgv --keyring "$TRUSTED_KEYRING" "$dist_dir/Release.gpg" "$release_file" >/dev/null 2>&1; then
             pass "detached signature valid: ${dist_dir#$REPO_ROOT/}/Release.gpg"
         else
             fail "detached signature invalid: ${dist_dir#$REPO_ROOT/}/Release.gpg"
@@ -126,7 +167,7 @@ verify_signature() {
     fi
 
     if [[ -f "$dist_dir/InRelease" ]]; then
-        if gpgv --keyring "$KEYRING" "$dist_dir/InRelease" >/dev/null 2>&1; then
+        if gpgv --keyring "$TRUSTED_KEYRING" "$dist_dir/InRelease" >/dev/null 2>&1; then
             pass "clearsigned metadata valid: ${dist_dir#$REPO_ROOT/}/InRelease"
         else
             fail "clearsigned metadata invalid: ${dist_dir#$REPO_ROOT/}/InRelease"
@@ -174,8 +215,16 @@ verify_packages_index() {
             fail "checksum mismatch: $filename expected $sha256 got $actual"
         fi
     done < <(packages_stream "$package_index" | awk '
-        /^Filename: / { filename=$2 }
-        /^SHA256: / { sha256=$2 }
+        /^Filename:[[:space:]]/ {
+            filename=substr($0, index($0, ":") + 1)
+            sub(/^[ \t]+/, "", filename)
+            sub(/[ \t]+$/, "", filename)
+        }
+        /^SHA256:[[:space:]]/ {
+            sha256=substr($0, index($0, ":") + 1)
+            sub(/^[ \t]+/, "", sha256)
+            sub(/[ \t]+$/, "", sha256)
+        }
         /^$/ {
             if (filename != "" && sha256 != "") {
                 print filename "\t" sha256

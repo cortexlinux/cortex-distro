@@ -148,7 +148,8 @@ artifacts before publishing or after downloading a repository snapshot.
 # Verify package checksums from Packages indexes
 ./scripts/verify-integrity.sh .
 
-# Also verify Release.gpg and InRelease signatures with the public key
+# Also verify Release.gpg and InRelease signatures with the public key.
+# ASCII-armored keys are dearmored into a temporary gpgv keyring automatically.
 ./scripts/verify-integrity.sh --keyring deploy/pub.gpg .
 ```
 
