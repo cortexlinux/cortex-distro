@@ -81,6 +81,36 @@ git commit -m "Add mypackage 1.0.0"
 git push
 ```
 
+## Smart Package Search
+
+Use `apt/scripts/search-packages.py` to query generated `Packages` indexes before
+publishing or while debugging the repository locally. It supports exact package
+names, short natural-language queries, common synonyms, and small typos without
+requiring network access or extra Python dependencies.
+
+```bash
+# Search generated repository indexes under dists/
+./apt/scripts/search-packages.py "web server"
+
+# Search a specific Packages file
+./apt/scripts/search-packages.py --index dists/stable/main/binary-amd64/Packages postgress
+```
+
+Example output:
+
+```text
+Results:
+  1. postgresql (16+257)
+     object-relational SQL database
+     score=33 reason=fuzzy name; fuzzy term
+```
+
+Run the focused test suite with:
+
+```bash
+make test-search
+```
+
 ### Method 2: Workflow dispatch
 
 Go to Actions → Publish APT Repository → Run workflow
