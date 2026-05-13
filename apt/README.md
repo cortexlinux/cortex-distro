@@ -139,6 +139,35 @@ gpg --armor --export-secret-keys YOUR_KEY_ID
 ./scripts/sign-release.sh YOUR_KEY_ID
 ```
 
+## Integrity Verification
+
+Use `scripts/verify-integrity.sh` to validate repository metadata and package
+artifacts before publishing or after downloading a repository snapshot.
+
+```bash
+# Verify Release.gpg / InRelease signatures and package checksums.
+# ASCII-armored keys are dearmored into a temporary gpgv keyring automatically.
+./scripts/verify-integrity.sh --keyring deploy/pub.gpg .
+
+# Check package artifacts only when no trusted public key is available.
+./scripts/verify-integrity.sh .
+```
+
+Without `--keyring`, verification is limited to artifact checksums and package
+paths; it does not prove the repository metadata source or trust chain.
+
+The verifier reports:
+
+- SHA256 checksum mismatches for `.deb` files listed in `Packages` or
+  `Packages.gz`
+- Missing package files referenced by package indexes
+- Unsafe package paths in repository metadata
+- Invalid or missing `Release.gpg` / `InRelease` signatures when a keyring is
+  provided
+
+This check is read-only. It does not install packages or execute package
+maintainer scripts.
+
 ## GitHub Pages Setup
 
 1. Go to Settings → Pages
