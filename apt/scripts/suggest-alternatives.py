@@ -199,7 +199,11 @@ def matched_group_names(query: str) -> set[str]:
             if query_norm == alias_norm or query_terms & alias_terms:
                 matches.add(group_name)
                 break
-            if len(query_norm) >= 4 and levenshtein(query_norm, alias_norm) <= 3:
+            if (
+                len(query_norm) >= 4
+                and abs(len(query_norm) - len(alias_norm)) <= 3
+                and levenshtein(query_norm, alias_norm) <= 3
+            ):
                 matches.add(group_name)
                 break
 
@@ -228,7 +232,11 @@ def score_package(package: Package, requested: str, group_names: set[str]) -> Su
         score += 35
         reasons.append("shared package terms")
 
-    distance = levenshtein(requested_norm, package_name_norm)
+    distance = (
+        levenshtein(requested_norm, package_name_norm)
+        if abs(len(requested_norm) - len(package_name_norm)) <= 3
+        else 99
+    )
     if distance <= 3:
         score += 40 - (distance * 8)
         reasons.append("similar package name")
