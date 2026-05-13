@@ -183,9 +183,9 @@ def score_package(package: Package, query: QueryContext) -> SearchResult | None:
         for package_term in package_terms:
             if len(package_term) < 4:
                 continue
-            similar_length = abs(len(query_term) - len(package_term)) <= 2
-            similar_spelling = levenshtein(query_term, package_term) <= 2
-            if similar_length and similar_spelling:
+            if abs(len(query_term) - len(package_term)) > 2:
+                continue
+            if levenshtein(query_term, package_term) <= 2:
                 score += 8
                 reasons.append("fuzzy term")
                 break
@@ -198,6 +198,9 @@ def score_package(package: Package, query: QueryContext) -> SearchResult | None:
 
 def search(packages: list[Package], query: str, limit: int) -> list[SearchResult]:
     query_context = build_query_context(query)
+    if not query_context.normalized:
+        return []
+
     results = [result for package in packages if (result := score_package(package, query_context))]
     return sorted(results, key=lambda result: (-result.score, result.package.name))[:limit]
 
@@ -218,10 +221,22 @@ def default_index_paths(repo_root: Path) -> list[Path]:
 def load_packages(repo_root: Path, indexes: list[Path]) -> list[Package]:
     paths = indexes or default_index_paths(repo_root)
     packages: list[Package] = []
+    seen_paths: set[Path] = set()
+    seen_packages: set[tuple[str, str, str]] = set()
     for path in paths:
+        path_key = path.resolve()
+        if path_key in seen_paths:
+            continue
+        seen_paths.add(path_key)
+
         if not path.exists():
             raise FileNotFoundError(f"package index not found: {path}")
-        packages.extend(parse_packages_index(path))
+        for package in parse_packages_index(path):
+            package_key = (package.name, package.version, package.description)
+            if package_key in seen_packages:
+                continue
+            seen_packages.add(package_key)
+            packages.append(package)
     return packages
 
 

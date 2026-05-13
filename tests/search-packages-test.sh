@@ -6,6 +6,7 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 INDEX="$TMP_DIR/Packages"
+DUP_INDEX="$TMP_DIR/Packages.duplicate"
 
 cat > "$INDEX" <<'EOF'
 Package: nginx
@@ -29,6 +30,7 @@ Version: 0.1.0-1
 Description: NVIDIA GPU runtime helpers for CX Linux
 EOF
 gzip -c "$INDEX" > "$INDEX.gz"
+cp "$INDEX" "$DUP_INDEX"
 
 mkdir -p "$TMP_DIR/repo/dists/stable/main/binary-amd64"
 cp "$INDEX" "$TMP_DIR/repo/dists/stable/main/binary-amd64/Packages"
@@ -83,6 +85,25 @@ fi
 
 output="$(run_search "not-a-real-package")"
 assert_contains "$output" "No matching packages found."
+
+output="$(run_search "!!!")"
+assert_contains "$output" "No matching packages found."
+
+output="$("$ROOT_DIR/apt/scripts/search-packages.py" --index "$INDEX" --index "$INDEX" postgresql)"
+postgres_count="$(grep -c "^  [0-9][.] postgresql " <<< "$output")"
+if [[ "$postgres_count" -ne 1 ]]; then
+    echo "Expected duplicate --index paths to be deduped" >&2
+    echo "$output" >&2
+    exit 1
+fi
+
+output="$("$ROOT_DIR/apt/scripts/search-packages.py" --index "$INDEX" --index "$DUP_INDEX" postgresql)"
+postgres_count="$(grep -c "^  [0-9][.] postgresql " <<< "$output")"
+if [[ "$postgres_count" -ne 1 ]]; then
+    echo "Expected overlapping package indexes to be deduped" >&2
+    echo "$output" >&2
+    exit 1
+fi
 
 if "$ROOT_DIR/apt/scripts/search-packages.py" --index "$TMP_DIR/missing" postgresql 2> "$TMP_DIR/missing.err"; then
     echo "Expected missing index to fail" >&2
