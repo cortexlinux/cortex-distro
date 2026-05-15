@@ -157,6 +157,7 @@ sbom:
 # Run tests
 test:
 	@echo -e "$(GREEN)Running build verification tests...$(NC)"
+	bash tests/cx-nvidia-safe-install-tests.sh
 	./tests/verify-iso.sh $(OUTPUT_DIR)/$(ISO_NAME)-offline.iso || true
 	./tests/verify-packages.sh || true
 	./tests/verify-preseed.sh || true
