@@ -12,12 +12,21 @@ Rules-Requires-Root: no
 Package: cx-gpu-nvidia
 Architecture: amd64
 Depends: ${misc:Depends},
- cx-core
+ cx-core,
+ apt,
+ bash,
+ dpkg,
+ kmod,
+ pciutils
 Recommends:
+ dkms,
+ mokutil,
  nvidia-driver,
  nvidia-kernel-dkms | nvidia-kernel-open-dkms,
  nvidia-smi,
  nvidia-settings,
+ mesa-utils,
+ ubuntu-drivers-common,
  nvidia-cuda-toolkit,
  nvidia-container-toolkit,
  libnvidia-ml1,
@@ -33,6 +42,8 @@ Description: CX Linux NVIDIA GPU enablement
  .
  Features:
   - NVIDIA driver (proprietary or open kernel modules)
+  - Safe driver installer with package snapshot and rollback
+  - Post-install validation for nvidia-smi, DKMS, kernel modules, and OpenGL
   - CUDA compute support
   - Container GPU passthrough (nvidia-container-toolkit)
   - GPU monitoring (nvidia-smi)
@@ -40,7 +51,7 @@ Description: CX Linux NVIDIA GPU enablement
  For Secure Boot systems:
   - Run 'cx gpu mok-setup' to configure MOK keys
   - Reboot and enroll keys in UEFI
-  - Then install this package
+  - Then run 'cx-nvidia-safe-install install'
  .
  Supported GPU architectures:
   - Ada Lovelace (H100, L40, RTX 40xx)

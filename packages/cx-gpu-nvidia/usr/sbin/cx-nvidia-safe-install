@@ -1,0 +1,698 @@
+#!/usr/bin/env bash
+# Safe NVIDIA driver installer for CX Linux.
+# Copyright 2026 AI Venture Holdings LLC
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+PROGRAM="$(basename "$0")"
+VERSION="0.1.0"
+
+STATE_DIR="${CX_NVIDIA_STATE_DIR:-/var/lib/cx/nvidia-installer}"
+LOG_FILE="${CX_NVIDIA_LOG_FILE:-/var/log/cx/nvidia-safe-installer.log}"
+DRY_RUN=0
+ASSUME_YES=0
+NO_UPDATE=0
+FORCE=0
+STRICT_TAINT=0
+SKIP_OPENGL=0
+TARGET_DRIVER=""
+SNAPSHOT_ID=""
+TAINT_FILE="${CX_NVIDIA_TAINT_FILE:-/proc/sys/kernel/tainted}"
+APT_DPKG_OPTIONS=(
+    -o "Dpkg::Options::=--force-confdef"
+    -o "Dpkg::Options::=--force-confold"
+)
+
+usage() {
+    cat <<EOF
+Usage:
+  $PROGRAM install [--driver PACKAGE] [--dry-run] [--yes] [--no-update] [--force]
+  $PROGRAM validate [--strict-taint] [--skip-opengl]
+  $PROGRAM rollback [--snapshot ID_OR_PATH] [--dry-run] [--yes]
+  $PROGRAM status
+
+Examples:
+  $PROGRAM install --driver nvidia-driver-545
+  $PROGRAM install --dry-run
+  $PROGRAM rollback
+  $PROGRAM rollback --snapshot 20260103T120000Z
+
+Safety model:
+  * Detect NVIDIA hardware and current driver state before changing packages.
+  * Check the running kernel, headers, DKMS visibility, and Secure Boot state.
+  * Save a package and hardware snapshot under $STATE_DIR/snapshots.
+  * Validate nvidia-smi, kernel module visibility, DKMS state, taint state, and
+    OpenGL when a display stack is present.
+  * Roll back NVIDIA/CUDA packages to the saved snapshot when validation fails.
+EOF
+}
+
+log_line() {
+    local level="$1"
+    shift
+    local line
+    line="[$(date -u +%Y-%m-%dT%H:%M:%SZ)] [$level] $*"
+    printf '%s\n' "$line" >&2
+    if mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null; then
+        printf '%s\n' "$line" >> "$LOG_FILE" 2>/dev/null || true
+    fi
+}
+
+info() { log_line INFO "$@"; }
+warn() { log_line WARN "$@"; }
+error() { log_line ERROR "$@"; }
+
+die() {
+    error "$@"
+    exit 1
+}
+
+cmd_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+quote_cmd() {
+    printf '%q ' "$@"
+}
+
+run_cmd() {
+    local rendered
+    rendered="$(quote_cmd "$@")"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        info "DRY-RUN: $rendered"
+        return 0
+    fi
+    info "RUN: $rendered"
+    "$@"
+}
+
+require_root_for_changes() {
+    if [ "$DRY_RUN" -eq 1 ] || [ "${CX_NVIDIA_SKIP_ROOT:-0}" = "1" ]; then
+        return 0
+    fi
+    if [ "$(id -u)" -ne 0 ]; then
+        die "install and rollback must run as root. Re-run with sudo, or use --dry-run."
+    fi
+}
+
+ensure_state_dirs() {
+    mkdir -p "$STATE_DIR/snapshots" "$STATE_DIR/tmp"
+}
+
+parse_args() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --driver)
+                [ "$#" -ge 2 ] || die "--driver requires a package name"
+                TARGET_DRIVER="$2"
+                shift 2
+                ;;
+            --snapshot)
+                [ "$#" -ge 2 ] || die "--snapshot requires an ID or path"
+                SNAPSHOT_ID="$2"
+                shift 2
+                ;;
+            --dry-run)
+                DRY_RUN=1
+                shift
+                ;;
+            --yes|-y)
+                ASSUME_YES=1
+                shift
+                ;;
+            --no-update)
+                NO_UPDATE=1
+                shift
+                ;;
+            --force)
+                FORCE=1
+                shift
+                ;;
+            --strict-taint)
+                STRICT_TAINT=1
+                shift
+                ;;
+            --skip-opengl)
+                SKIP_OPENGL=1
+                shift
+                ;;
+            --help|-h)
+                usage
+                exit 0
+                ;;
+            *)
+                die "unknown option: $1"
+                ;;
+        esac
+    done
+}
+
+detect_gpu() {
+    if cmd_exists nvidia-smi && nvidia-smi -L >/dev/null 2>&1; then
+        nvidia-smi -L
+        return 0
+    fi
+
+    if cmd_exists lspci; then
+        local pci
+        pci="$(lspci -nn 2>/dev/null | grep -i 'nvidia' || true)"
+        if [ -n "$pci" ]; then
+            printf '%s\n' "$pci"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+current_driver_version() {
+    if cmd_exists nvidia-smi; then
+        local smi_version
+        smi_version="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -n 1 || true)"
+        if [ -n "$smi_version" ]; then
+            printf '%s\n' "$smi_version"
+            return 0
+        fi
+    fi
+
+    if cmd_exists dpkg-query; then
+        dpkg-query -W -f='${binary:Package} ${Version}\n' 'nvidia-driver*' 2>/dev/null \
+            | sort -V \
+            | tail -n 1 \
+            || true
+    fi
+}
+
+recommend_driver() {
+    if cmd_exists ubuntu-drivers; then
+        local recommended
+        recommended="$(ubuntu-drivers devices 2>/dev/null \
+            | awk -F': ' '/recommended/ { split($2, p, " "); print p[1]; exit }' \
+            || true)"
+        if [ -n "$recommended" ]; then
+            printf '%s\n' "$recommended"
+            return 0
+        fi
+    fi
+
+    if cmd_exists apt-cache; then
+        local newest
+        newest="$(apt-cache search '^nvidia-driver-[0-9]+' 2>/dev/null \
+            | awk '{print $1}' \
+            | sort -V \
+            | tail -n 1 \
+            || true)"
+        if [ -n "$newest" ]; then
+            printf '%s\n' "$newest"
+            return 0
+        fi
+    fi
+
+    printf '%s\n' "nvidia-driver"
+}
+
+check_nvidia_gpu_or_force() {
+    local gpu
+    if gpu="$(detect_gpu)"; then
+        info "Detected NVIDIA hardware:"
+        printf '%s\n' "$gpu" >&2
+        return 0
+    fi
+
+    if [ "$FORCE" -eq 1 ]; then
+        warn "No NVIDIA GPU was detected, but --force was supplied."
+        return 0
+    fi
+
+    die "No NVIDIA GPU detected. Use --force only for image-building or controlled test systems."
+}
+
+check_kernel_compatibility() {
+    local kernel="$1"
+    local problems=0
+
+    info "Checking running kernel compatibility for $kernel"
+
+    if [ ! -d "/lib/modules/$kernel" ]; then
+        warn "Missing /lib/modules/$kernel; DKMS modules may not build for the running kernel."
+        problems=$((problems + 1))
+    fi
+
+    if [ ! -e "/lib/modules/$kernel/build" ]; then
+        if cmd_exists dpkg-query && dpkg-query -W "linux-headers-$kernel" >/dev/null 2>&1; then
+            info "Found linux-headers-$kernel package."
+        else
+            warn "Kernel headers for $kernel were not found."
+            problems=$((problems + 1))
+        fi
+    else
+        info "Kernel header build link exists for $kernel."
+    fi
+
+    if cmd_exists dkms; then
+        info "DKMS is available."
+    else
+        warn "dkms command not found; NVIDIA module rebuild state cannot be validated."
+        problems=$((problems + 1))
+    fi
+
+    if [ "$problems" -gt 0 ] && [ "$FORCE" -ne 1 ]; then
+        die "Kernel compatibility checks found $problems problem(s). Install matching headers/DKMS or re-run with --force."
+    fi
+}
+
+check_secure_boot() {
+    if ! cmd_exists mokutil; then
+        warn "mokutil is not installed; Secure Boot state cannot be checked."
+        return 0
+    fi
+
+    local sb_state
+    sb_state="$(mokutil --sb-state 2>/dev/null || true)"
+    if printf '%s\n' "$sb_state" | grep -qi 'enabled'; then
+        if [ "$FORCE" -eq 1 ]; then
+            warn "Secure Boot appears enabled. Continuing because --force was supplied."
+            return 0
+        fi
+        die "Secure Boot appears enabled. Enroll MOK keys or pass --force after confirming signed module handling."
+    fi
+
+    if [ -n "$sb_state" ]; then
+        info "$sb_state"
+    else
+        warn "mokutil did not report Secure Boot state."
+    fi
+}
+
+preflight_apt() {
+    local target="$1"
+
+    cmd_exists apt-cache || die "apt-cache is required for package compatibility checks."
+    cmd_exists apt-get || die "apt-get is required to install or roll back NVIDIA packages."
+
+    if ! apt-cache policy "$target" 2>/dev/null \
+        | awk '/Candidate:/ && $2 != "(none)" { found=1 } END { exit(found ? 0 : 1) }'; then
+        die "No install candidate found for $target."
+    fi
+
+    info "APT candidate exists for $target."
+    info "RUN: apt-get -s install $target"
+    apt-get -s install "$target"
+}
+
+capture_file() {
+    local dest="$1"
+    shift
+    {
+        "$@" 2>&1 || true
+    } > "$dest"
+}
+
+snapshot_dpkg_nvidia() {
+    if cmd_exists dpkg-query; then
+        dpkg-query -W -f='${binary:Package}\t${Version}\t${db:Status-Abbrev}\n' \
+            'nvidia*' 'libnvidia*' 'cuda*' 'xserver-xorg-video-nvidia*' 'firmware-nvidia*' \
+            2>/dev/null || true
+    fi
+}
+
+snapshot_dpkg_selections() {
+    if cmd_exists dpkg; then
+        dpkg --get-selections 2>/dev/null || true
+    fi
+}
+
+snapshot_apt_mark_manual() {
+    if cmd_exists apt-mark; then
+        apt-mark showmanual 2>/dev/null || true
+    fi
+}
+
+snapshot_apt_mark_auto() {
+    if cmd_exists apt-mark; then
+        apt-mark showauto 2>/dev/null || true
+    fi
+}
+
+snapshot_dkms() {
+    if cmd_exists dkms; then
+        dkms status 2>/dev/null || true
+    fi
+}
+
+snapshot_modules() {
+    if cmd_exists lsmod; then
+        lsmod 2>/dev/null | grep -E '^(nvidia|nouveau)' || true
+    fi
+}
+
+create_snapshot() {
+    local target="$1"
+    local snapshot_id
+    local snapshot_path
+    local kernel
+    local current_driver
+
+    ensure_state_dirs
+    snapshot_id="$(date -u +%Y%m%dT%H%M%SZ)-${RANDOM}${RANDOM}"
+    snapshot_path="$STATE_DIR/snapshots/$snapshot_id"
+    kernel="$(uname -r)"
+    current_driver="$(current_driver_version || true)"
+
+    mkdir -p "$snapshot_path/etc-modprobe.d"
+
+    cat > "$snapshot_path/meta.env" <<EOF
+snapshot_id=$snapshot_id
+created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+kernel=$kernel
+target_driver=$target
+current_driver=${current_driver:-unknown}
+dry_run=$DRY_RUN
+version=$VERSION
+EOF
+
+    capture_file "$snapshot_path/gpu.txt" detect_gpu
+    capture_file "$snapshot_path/nvidia-smi.txt" nvidia-smi -q
+    capture_file "$snapshot_path/lspci.txt" lspci -nn
+    capture_file "$snapshot_path/dpkg-nvidia.txt" snapshot_dpkg_nvidia
+    capture_file "$snapshot_path/dpkg-selections.txt" snapshot_dpkg_selections
+    capture_file "$snapshot_path/apt-mark-manual.txt" snapshot_apt_mark_manual
+    capture_file "$snapshot_path/apt-mark-auto.txt" snapshot_apt_mark_auto
+    capture_file "$snapshot_path/dkms-status.txt" snapshot_dkms
+    capture_file "$snapshot_path/modules.txt" snapshot_modules
+
+    if [ -d /etc/modprobe.d ]; then
+        find /etc/modprobe.d -maxdepth 1 -type f \( -iname '*nvidia*' -o -iname '*nouveau*' \) \
+            -exec cp -a {} "$snapshot_path/etc-modprobe.d/" \; 2>/dev/null || true
+    fi
+
+    printf '%s\n' "$snapshot_id" > "$STATE_DIR/latest"
+    info "Created NVIDIA driver snapshot: $snapshot_path"
+    printf '%s\n' "$snapshot_path"
+}
+
+snapshot_path_from_id() {
+    local id="$1"
+    if [ -z "$id" ]; then
+        [ -f "$STATE_DIR/latest" ] || die "No latest snapshot is recorded under $STATE_DIR."
+        id="$(cat "$STATE_DIR/latest")"
+    fi
+
+    if [ -d "$id" ]; then
+        printf '%s\n' "$id"
+        return 0
+    fi
+
+    if [ -d "$STATE_DIR/snapshots/$id" ]; then
+        printf '%s\n' "$STATE_DIR/snapshots/$id"
+        return 0
+    fi
+
+    die "Snapshot not found: $id"
+}
+
+list_installed_nvidia_packages() {
+    snapshot_dpkg_nvidia | awk -F '\t' '$3 ~ /^ii/ { print $1 "\t" $2 }'
+}
+
+snapshot_contains_installed_pkg() {
+    local snapshot_path="$1"
+    local pkg="$2"
+    awk -F '\t' -v pkg="$pkg" '$1 == pkg && $3 ~ /^ii/ { found=1 } END { exit(found ? 0 : 1) }' \
+        "$snapshot_path/dpkg-nvidia.txt"
+}
+
+restore_manual_marks() {
+    local snapshot_path="$1"
+    [ -f "$snapshot_path/apt-mark-manual.txt" ] || return 0
+    cmd_exists apt-mark || return 0
+
+    local pkg
+    while IFS= read -r pkg; do
+        case "$pkg" in
+            nvidia*|libnvidia*|cuda*|xserver-xorg-video-nvidia*|firmware-nvidia*)
+                run_cmd apt-mark manual "$pkg"
+                ;;
+        esac
+    done < "$snapshot_path/apt-mark-manual.txt"
+}
+
+rollback_snapshot() {
+    local snapshot_path="$1"
+    local remove_pkgs=()
+    local restore_specs=()
+    local pkg
+    local version
+    local status
+
+    require_root_for_changes
+    [ -f "$snapshot_path/dpkg-nvidia.txt" ] || die "Snapshot is missing dpkg-nvidia.txt: $snapshot_path"
+
+    while IFS=$'\t' read -r pkg version; do
+        [ -n "$pkg" ] || continue
+        if ! snapshot_contains_installed_pkg "$snapshot_path" "$pkg"; then
+            remove_pkgs+=("$pkg")
+        fi
+    done < <(list_installed_nvidia_packages)
+
+    while IFS=$'\t' read -r pkg version status; do
+        [ -n "${pkg:-}" ] || continue
+        if [[ "$status" == ii* ]] && [ -n "${version:-}" ]; then
+            restore_specs+=("${pkg}=${version}")
+        fi
+    done < "$snapshot_path/dpkg-nvidia.txt"
+
+    if [ "${#remove_pkgs[@]}" -gt 0 ]; then
+        info "Rolling back newly installed NVIDIA/CUDA packages: ${remove_pkgs[*]}"
+        run_cmd env DEBIAN_FRONTEND=noninteractive apt-get purge -y "${APT_DPKG_OPTIONS[@]}" "${remove_pkgs[@]}"
+    else
+        info "No newly installed NVIDIA/CUDA packages need purging."
+    fi
+
+    if [ "${#restore_specs[@]}" -gt 0 ]; then
+        info "Restoring NVIDIA/CUDA package versions from snapshot."
+        run_cmd env DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades "${APT_DPKG_OPTIONS[@]}" "${restore_specs[@]}"
+    else
+        info "Snapshot had no previously installed NVIDIA/CUDA packages to restore."
+    fi
+
+    restore_manual_marks "$snapshot_path"
+
+    if cmd_exists update-initramfs; then
+        run_cmd update-initramfs -u
+    fi
+
+    info "Rollback completed from snapshot: $snapshot_path"
+}
+
+validate_driver() {
+    local failed=0
+
+    info "Running NVIDIA post-install validation."
+
+    if cmd_exists nvidia-smi && nvidia-smi >/dev/null 2>&1; then
+        info "nvidia-smi responded successfully."
+    else
+        error "nvidia-smi did not respond."
+        failed=1
+    fi
+
+    if cmd_exists modprobe; then
+        if modprobe -n nvidia >/dev/null 2>&1; then
+            info "nvidia kernel module can be resolved by modprobe."
+        else
+            error "modprobe cannot resolve the nvidia kernel module."
+            failed=1
+        fi
+    else
+        warn "modprobe is unavailable; skipping module resolution check."
+    fi
+
+    if cmd_exists lsmod; then
+        if lsmod 2>/dev/null | grep -q '^nvidia'; then
+            info "nvidia kernel module is loaded."
+        else
+            warn "nvidia module is not currently loaded; a reboot or display-manager restart may still be required."
+        fi
+    fi
+
+    if cmd_exists dkms; then
+        local dkms_output
+        dkms_output="$(dkms status 2>/dev/null || true)"
+        if printf '%s\n' "$dkms_output" | grep -Ei 'nvidia' | grep -Eiq '(bad|failed|error|broken)'; then
+            error "DKMS reports a failed NVIDIA module state."
+            printf '%s\n' "$dkms_output" >&2
+            failed=1
+        elif printf '%s\n' "$dkms_output" | grep -qi 'nvidia'; then
+            info "DKMS reports NVIDIA module state."
+        else
+            warn "DKMS did not report an NVIDIA module entry."
+        fi
+    else
+        warn "dkms is unavailable; skipping DKMS state validation."
+    fi
+
+    if [ -r "$TAINT_FILE" ]; then
+        local tainted
+        tainted="$(cat "$TAINT_FILE")"
+        if [[ ! "$tainted" =~ ^[0-9]+$ ]]; then
+            warn "Kernel taint value is not numeric: $tainted"
+        elif [ "$tainted" != "0" ]; then
+            local expected_nvidia_taint_mask
+            local unexpected_taint
+            expected_nvidia_taint_mask=$((1 | 4096))
+            unexpected_taint=$((tainted & ~expected_nvidia_taint_mask))
+            if [ "$STRICT_TAINT" -eq 1 ]; then
+                if [ "$unexpected_taint" -ne 0 ]; then
+                    error "Unexpected kernel taint bits set (raw=$tainted, unexpected=$unexpected_taint)."
+                    failed=1
+                else
+                    info "Kernel taint value is $tainted (only expected NVIDIA proprietary/out-of-tree bits set)."
+                fi
+            elif [ "$unexpected_taint" -ne 0 ]; then
+                warn "Unexpected kernel taint bits set (raw=$tainted, unexpected=$unexpected_taint); not failing without --strict-taint."
+            else
+                info "Kernel taint value is $tainted (only expected NVIDIA proprietary/out-of-tree bits set)."
+            fi
+        else
+            info "Kernel taint value is 0."
+        fi
+    fi
+
+    if [ "$SKIP_OPENGL" -eq 1 ]; then
+        info "Skipping OpenGL validation because --skip-opengl was supplied."
+    elif cmd_exists glxinfo && [ -n "${DISPLAY:-}" ]; then
+        if glxinfo -B 2>/dev/null | grep -qi 'OpenGL renderer'; then
+            info "OpenGL renderer query succeeded."
+        else
+            error "OpenGL renderer query failed."
+            failed=1
+        fi
+    else
+        warn "OpenGL validation skipped; glxinfo or DISPLAY is unavailable."
+    fi
+
+    [ "$failed" -eq 0 ]
+}
+
+install_driver() {
+    local kernel
+    local target
+    local snapshot_path
+
+    require_root_for_changes
+    ensure_state_dirs
+
+    check_nvidia_gpu_or_force
+
+    kernel="$(uname -r)"
+    target="${TARGET_DRIVER:-$(recommend_driver)}"
+    [ -n "$target" ] || die "Could not determine an NVIDIA driver package."
+
+    info "Target NVIDIA driver package: $target"
+    info "Current driver state: $(current_driver_version || printf 'unknown')"
+
+    check_kernel_compatibility "$kernel"
+    check_secure_boot
+
+    snapshot_path="$(create_snapshot "$target" | tail -n 1)"
+    preflight_apt "$target"
+
+    if [ "$NO_UPDATE" -ne 1 ]; then
+        run_cmd apt-get update
+    fi
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        info "Dry run complete. Snapshot and APT simulation succeeded; no packages were changed."
+        return 0
+    fi
+
+    if ! run_cmd env DEBIAN_FRONTEND=noninteractive apt-get install -y "${APT_DPKG_OPTIONS[@]}" "$target"; then
+        warn "APT install failed; attempting rollback."
+        rollback_snapshot "$snapshot_path" || true
+        return 1
+    fi
+
+    if ! validate_driver; then
+        warn "Validation failed; attempting automatic rollback."
+        rollback_snapshot "$snapshot_path" || true
+        return 1
+    fi
+
+    cat > "$STATE_DIR/last-success.env" <<EOF
+installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+target_driver=$target
+snapshot=$snapshot_path
+kernel=$kernel
+EOF
+
+    info "NVIDIA driver installation validated successfully."
+    info "Rollback is available with: $PROGRAM rollback --snapshot $(basename "$snapshot_path")"
+}
+
+show_status() {
+    local latest="none"
+    local current_driver
+    local gpu_info
+
+    if [ -f "$STATE_DIR/latest" ]; then
+        latest="$(cat "$STATE_DIR/latest")"
+    fi
+
+    current_driver="$(current_driver_version || true)"
+
+    printf 'CX NVIDIA safe installer %s\n' "$VERSION"
+    printf 'State directory: %s\n' "$STATE_DIR"
+    printf 'Latest snapshot: %s\n' "$latest"
+    printf 'Current driver: %s\n' "${current_driver:-unknown}"
+
+    if gpu_info="$(detect_gpu 2>/dev/null)"; then
+        printf 'NVIDIA hardware:\n'
+        printf '%s\n' "$gpu_info" | sed 's/^/  /'
+    else
+        printf 'NVIDIA hardware: not detected\n'
+    fi
+
+    if [ -f "$STATE_DIR/last-success.env" ]; then
+        printf 'Last successful install:\n'
+        sed 's/^/  /' "$STATE_DIR/last-success.env"
+    fi
+}
+
+main() {
+    local command="${1:-help}"
+    if [ "$#" -gt 0 ]; then
+        shift
+    fi
+
+    case "$command" in
+        install|validate|rollback|status)
+            parse_args "$@"
+            ;;
+        help|--help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            die "unknown command: $command"
+            ;;
+    esac
+
+    case "$command" in
+        install)
+            install_driver
+            ;;
+        validate)
+            validate_driver
+            ;;
+        rollback)
+            rollback_snapshot "$(snapshot_path_from_id "$SNAPSHOT_ID")"
+            ;;
+        status)
+            show_status
+            ;;
+    esac
+}
+
+main "$@"

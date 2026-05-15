@@ -1,3 +1,16 @@
 #!/usr/bin/make -f
+export DH_VERBOSE=1
+
 %:
 	dh $@
+
+override_dh_auto_install:
+	install -d $(CURDIR)/debian/cx-gpu-nvidia/usr/sbin
+	install -m 755 usr/sbin/cx-nvidia-safe-install \
+		$(CURDIR)/debian/cx-gpu-nvidia/usr/sbin/cx-nvidia-safe-install
+	install -d $(CURDIR)/debian/cx-gpu-nvidia/usr/share/doc/cx-gpu-nvidia
+	install -m 644 usr/share/doc/cx-gpu-nvidia/nvidia-safe-install.md \
+		$(CURDIR)/debian/cx-gpu-nvidia/usr/share/doc/cx-gpu-nvidia/nvidia-safe-install.md
+
+override_dh_auto_clean:
+	@echo "No clean step required"
