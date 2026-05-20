@@ -81,6 +81,59 @@ git commit -m "Add mypackage 1.0.0"
 git push
 ```
 
+## Package Conflict Checks
+
+`apt/scripts/resolve-conflicts.py` checks a planned install list before it is
+passed to the package manager. It reads normal APT `Conflicts` and `Breaks`
+metadata, and it can also read a small JSON rules file for CX-specific choices.
+
+Example:
+
+```bash
+apt/scripts/resolve-conflicts.py \
+  --rules ./package-conflicts.json \
+  docker.io podman
+```
+
+Example rules file:
+
+```json
+{
+  "conflicts": [
+    {
+      "packages": ["docker.io", "podman"],
+      "reason": "Both packages manage the default container runtime socket.",
+      "options": ["docker.io", "podman"]
+    }
+  ]
+}
+```
+
+The helper exits with status `1` when conflicts are found. A user choice can be
+saved and reused later:
+
+```bash
+apt/scripts/resolve-conflicts.py \
+  --rules ./package-conflicts.json \
+  --choice podman \
+  docker.io podman
+```
+
+For an interactive prompt:
+
+```bash
+apt/scripts/resolve-conflicts.py --interactive docker.io podman
+```
+
+In the installed `cx-core` package this is exposed through the wrapper:
+
+```bash
+cx resolve-conflicts docker.io podman
+```
+
+`cx install package-a package-b` also runs the same preflight check before it
+hands off to the Python package manager.
+
 ### Method 2: Workflow dispatch
 
 Go to Actions → Publish APT Repository → Run workflow
