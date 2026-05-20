@@ -24,6 +24,8 @@ APT_RELATION_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9+.-]+")
 
 @dataclass(frozen=True)
 class Conflict:
+    """One conflict found between requested packages."""
+
     packages: tuple[str, ...]
     reason: str
     options: tuple[str, ...]
@@ -31,10 +33,12 @@ class Conflict:
 
     @property
     def key(self) -> str:
+        """Stable key used for saved choices and duplicate removal."""
         return "|".join(sorted(self.packages))
 
 
 def parse_relation_names(value: str) -> set[str]:
+    """Extract package names from an apt relationship field."""
     names: set[str] = set()
     for part in value.split(","):
         names.update(APT_RELATION_RE.findall(part.strip()))
@@ -42,6 +46,7 @@ def parse_relation_names(value: str) -> set[str]:
 
 
 def read_apt_fields(package: str) -> dict[str, list[str]]:
+    """Read fields from apt-cache show for one package."""
     try:
         result = subprocess.run(
             ["apt-cache", "show", package],
@@ -71,6 +76,7 @@ def read_apt_fields(package: str) -> dict[str, list[str]]:
 
 
 def detect_apt_conflicts(packages: list[str]) -> list[Conflict]:
+    """Find conflicts reported by apt metadata for the requested packages."""
     requested = set(packages)
     conflicts: dict[str, Conflict] = {}
 
@@ -96,6 +102,7 @@ def detect_apt_conflicts(packages: list[str]) -> list[Conflict]:
 
 
 def load_rule_conflicts(path: Path, packages: list[str]) -> list[Conflict]:
+    """Load extra conflict rules from JSON when the file is available."""
     if not path.exists():
         return []
 
@@ -126,6 +133,7 @@ def load_rule_conflicts(path: Path, packages: list[str]) -> list[Conflict]:
 
 
 def load_preferences(path: Path) -> dict[str, str]:
+    """Load saved conflict choices from disk."""
     if not path.exists():
         return {}
     try:
@@ -139,6 +147,7 @@ def load_preferences(path: Path) -> dict[str, str]:
 
 
 def save_preference(path: Path, key: str, choice: str) -> None:
+    """Persist one saved choice while keeping existing choices."""
     data = load_preferences(path)
     data[key] = choice
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -148,6 +157,7 @@ def save_preference(path: Path, key: str, choice: str) -> None:
 
 
 def conflict_to_dict(conflict: Conflict, saved_choice: str | None) -> dict[str, object]:
+    """Convert a conflict to the JSON output shape."""
     return {
         "packages": list(conflict.packages),
         "reason": conflict.reason,
@@ -158,6 +168,7 @@ def conflict_to_dict(conflict: Conflict, saved_choice: str | None) -> dict[str, 
 
 
 def print_human(conflicts: Iterable[Conflict], preferences: dict[str, str]) -> None:
+    """Print the normal terminal output."""
     conflict_list = list(conflicts)
     if not conflict_list:
         print("No package conflicts found.")
@@ -176,6 +187,7 @@ def print_human(conflicts: Iterable[Conflict], preferences: dict[str, str]) -> N
 
 
 def prompt_for_choices(conflicts: Iterable[Conflict], preferences_path: Path) -> dict[str, str]:
+    """Ask the user which package to keep for each conflict."""
     saved: dict[str, str] = {}
     for conflict in conflicts:
         print(f"\nConflict: {' vs '.join(conflict.packages)}")
@@ -206,6 +218,7 @@ def prompt_for_choices(conflicts: Iterable[Conflict], preferences_path: Path) ->
 
 
 def default_preferences_path() -> Path:
+    """Return the default path for saved conflict preferences."""
     return Path(
         os.environ.get(
             "CX_CONFLICT_PREFERENCES",
@@ -215,6 +228,7 @@ def default_preferences_path() -> Path:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse command line arguments."""
     parser = argparse.ArgumentParser(
         description="Detect package conflicts and save a preferred resolution."
     )
@@ -240,6 +254,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str]) -> int:
+    """Run the conflict resolver command."""
     args = parse_args(argv)
     preferences_path = Path(args.preferences).expanduser()
     preferences = load_preferences(preferences_path)
