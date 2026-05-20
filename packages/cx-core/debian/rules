@@ -25,10 +25,19 @@ override_dh_auto_install:
 	# Install default configuration
 	install -m 644 debian/cx.yaml \
 		$(CURDIR)/debian/cx-core/etc/cx/cx.yaml
+	install -m 755 ../../apt/scripts/resolve-conflicts.py \
+		$(CURDIR)/debian/cx-core/usr/share/cx/resolve-conflicts.py
 
 	# Create cx wrapper that installs from PyPI on first run
 	echo '#!/bin/bash' > $(CURDIR)/debian/cx-core/usr/bin/cx
 	echo '# CX Linux CLI Wrapper' >> $(CURDIR)/debian/cx-core/usr/bin/cx
+	echo 'if [ "$$1" = "resolve-conflicts" ]; then' >> $(CURDIR)/debian/cx-core/usr/bin/cx
+	echo '    shift' >> $(CURDIR)/debian/cx-core/usr/bin/cx
+	echo '    exec python3 /usr/share/cx/resolve-conflicts.py "$$@"' >> $(CURDIR)/debian/cx-core/usr/bin/cx
+	echo 'fi' >> $(CURDIR)/debian/cx-core/usr/bin/cx
+	echo 'if [ "$$1" = "install" ] && [ "$$#" -gt 2 ]; then' >> $(CURDIR)/debian/cx-core/usr/bin/cx
+	echo '    python3 /usr/share/cx/resolve-conflicts.py "$${@:2}" || exit $$?' >> $(CURDIR)/debian/cx-core/usr/bin/cx
+	echo 'fi' >> $(CURDIR)/debian/cx-core/usr/bin/cx
 	echo 'if ! python3 -c "import cx" 2>/dev/null; then' >> $(CURDIR)/debian/cx-core/usr/bin/cx
 	echo '    echo "Installing cx-linux from PyPI..."' >> $(CURDIR)/debian/cx-core/usr/bin/cx
 	echo '    pip3 install --user cx-linux' >> $(CURDIR)/debian/cx-core/usr/bin/cx
