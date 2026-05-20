@@ -35,8 +35,14 @@ override_dh_auto_install:
 	echo '    shift' >> $(CURDIR)/debian/cx-core/usr/bin/cx
 	echo '    exec python3 /usr/share/cx/resolve-conflicts.py "$$@"' >> $(CURDIR)/debian/cx-core/usr/bin/cx
 	echo 'fi' >> $(CURDIR)/debian/cx-core/usr/bin/cx
-	echo 'if [ "$$1" = "install" ] && [ "$$#" -gt 2 ]; then' >> $(CURDIR)/debian/cx-core/usr/bin/cx
-	echo '    python3 /usr/share/cx/resolve-conflicts.py "$${@:2}" || exit $$?' >> $(CURDIR)/debian/cx-core/usr/bin/cx
+	echo 'if [ "$$1" = "install" ]; then' >> $(CURDIR)/debian/cx-core/usr/bin/cx
+	echo '    cx_install_operands=0' >> $(CURDIR)/debian/cx-core/usr/bin/cx
+	echo '    for cx_arg in "$${@:2}"; do' >> $(CURDIR)/debian/cx-core/usr/bin/cx
+	echo '        case "$$cx_arg" in -*) ;; *) cx_install_operands=$$((cx_install_operands + 1)) ;; esac' >> $(CURDIR)/debian/cx-core/usr/bin/cx
+	echo '    done' >> $(CURDIR)/debian/cx-core/usr/bin/cx
+	echo '    if [ "$$cx_install_operands" -gt 1 ]; then' >> $(CURDIR)/debian/cx-core/usr/bin/cx
+	echo '        python3 /usr/share/cx/resolve-conflicts.py "$${@:2}" || exit $$?' >> $(CURDIR)/debian/cx-core/usr/bin/cx
+	echo '    fi' >> $(CURDIR)/debian/cx-core/usr/bin/cx
 	echo 'fi' >> $(CURDIR)/debian/cx-core/usr/bin/cx
 	echo 'if ! python3 -c "import cx" 2>/dev/null; then' >> $(CURDIR)/debian/cx-core/usr/bin/cx
 	echo '    echo "Installing cx-linux from PyPI..."' >> $(CURDIR)/debian/cx-core/usr/bin/cx

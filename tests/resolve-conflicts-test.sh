@@ -82,6 +82,22 @@ MALFORMED_OUTPUT="$(python3 "$ROOT_DIR/apt/scripts/resolve-conflicts.py" \
 assert_contains "$MALFORMED_OUTPUT" "Warning: could not read rules file"
 assert_contains "$MALFORMED_OUTPUT" "No package conflicts found."
 
+cat > "$TMP_DIR/bad-schema.json" <<'JSON'
+{
+  "conflicts": [
+    42,
+    {"packages": "nginx"},
+    {"packages": ["nginx", "curl"], "options": "nginx"}
+  ]
+}
+JSON
+BAD_SCHEMA_OUTPUT="$(python3 "$ROOT_DIR/apt/scripts/resolve-conflicts.py" \
+    --rules "$TMP_DIR/bad-schema.json" \
+    --preferences "$PREFS_FILE" \
+    nginx curl 2>&1 || true)"
+assert_contains "$BAD_SCHEMA_OUTPUT" "Package conflicts found"
+assert_contains "$BAD_SCHEMA_OUTPUT" "curl vs nginx"
+
 INTERACTIVE_OUTPUT="$(printf '1\n' | python3 "$ROOT_DIR/apt/scripts/resolve-conflicts.py" \
     --rules "$RULES_FILE" \
     --preferences "$PREFS_FILE" \

@@ -14,12 +14,14 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 
 APT_RELATION_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9+.-]+")
+APT_CACHE = Path("/usr/bin/apt-cache")
 
 
 @dataclass(frozen=True)
@@ -47,9 +49,12 @@ def parse_relation_names(value: str) -> set[str]:
 
 def read_apt_fields(package: str) -> dict[str, list[str]]:
     """Read fields from apt-cache show for one package."""
+    if not APT_CACHE.is_file() or not os.access(APT_CACHE, os.X_OK):
+        return {}
+
     try:
         result = subprocess.run(
-            ["apt-cache", "show", package],
+            [str(APT_CACHE), "show", package],
             check=False,
             capture_output=True,
             text=True,
@@ -113,14 +118,28 @@ def load_rule_conflicts(path: Path, packages: list[str]) -> list[Conflict]:
         print(f"Warning: could not read rules file {path}: {exc}", file=sys.stderr)
         return []
 
+    if not isinstance(data, dict):
+        return []
+    items = data.get("conflicts", [])
+    if not isinstance(items, list):
+        return []
+
     requested = set(packages)
     found: list[Conflict] = []
-    for item in data.get("conflicts", []):
-        item_packages = tuple(str(pkg) for pkg in item.get("packages", []))
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw_packages = item.get("packages", [])
+        if not isinstance(raw_packages, list):
+            continue
+        item_packages = tuple(str(pkg) for pkg in raw_packages)
         if len(item_packages) < 2:
             continue
         if set(item_packages).issubset(requested):
-            options = tuple(str(option) for option in item.get("options", item_packages))
+            raw_options = item.get("options", item_packages)
+            if not isinstance(raw_options, (list, tuple)):
+                raw_options = item_packages
+            options = tuple(str(option) for option in raw_options)
             found.append(
                 Conflict(
                     packages=tuple(sorted(item_packages)),
@@ -156,9 +175,24 @@ def save_preference(path: Path, key: str, choice: str) -> None:
 def save_preferences(path: Path, data: dict[str, str]) -> None:
     """Persist all saved choices in one write."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(data, handle, indent=2, sort_keys=True)
-        handle.write("\n")
+    temp_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            delete=False,
+        ) as handle:
+            temp_path = handle.name
+            json.dump(data, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if temp_path and Path(temp_path).exists():
+            Path(temp_path).unlink()
 
 
 def conflict_to_dict(conflict: Conflict, saved_choice: str | None) -> dict[str, object]:
