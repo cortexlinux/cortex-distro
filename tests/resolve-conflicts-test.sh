@@ -32,7 +32,7 @@ assert_contains() {
 }
 
 set +e
-OUTPUT="$("$ROOT_DIR/apt/scripts/resolve-conflicts.py" \
+OUTPUT="$(python3 "$ROOT_DIR/apt/scripts/resolve-conflicts.py" \
     --rules "$RULES_FILE" \
     --preferences "$PREFS_FILE" \
     docker.io podman 2>&1)"
@@ -50,7 +50,7 @@ assert_contains "$OUTPUT" "docker.io vs podman"
 assert_contains "$OUTPUT" "keep docker.io"
 assert_contains "$OUTPUT" "keep podman"
 
-"$ROOT_DIR/apt/scripts/resolve-conflicts.py" \
+python3 "$ROOT_DIR/apt/scripts/resolve-conflicts.py" \
     --rules "$RULES_FILE" \
     --preferences "$PREFS_FILE" \
     --choice podman \
@@ -59,14 +59,30 @@ assert_contains "$OUTPUT" "keep podman"
 SAVED="$(cat "$PREFS_FILE")"
 assert_contains "$SAVED" "\"docker.io|podman\": \"podman\""
 
-JSON_OUTPUT="$("$ROOT_DIR/apt/scripts/resolve-conflicts.py" \
+JSON_OUTPUT="$(python3 "$ROOT_DIR/apt/scripts/resolve-conflicts.py" \
     --rules "$RULES_FILE" \
     --preferences "$PREFS_FILE" \
     --json \
     docker.io podman || true)"
 assert_contains "$JSON_OUTPUT" "\"saved_choice\": \"podman\""
 
-INTERACTIVE_OUTPUT="$(printf '1\n' | "$ROOT_DIR/apt/scripts/resolve-conflicts.py" \
+python3 -c "import importlib.util, sys; spec = importlib.util.spec_from_file_location('resolver', '$ROOT_DIR/apt/scripts/resolve-conflicts.py'); mod = importlib.util.module_from_spec(spec); sys.modules['resolver'] = mod; spec.loader.exec_module(mod); assert mod.parse_relation_names('pkg-a | pkg-a-compat (>= 1), pkg-b') == {'pkg-a', 'pkg-a-compat', 'pkg-b'}"
+
+BROKEN_OUTPUT="$(python3 "$ROOT_DIR/apt/scripts/resolve-conflicts.py" \
+    --rules "$TMP_DIR/broken.json" \
+    --preferences "$PREFS_FILE" \
+    nginx curl 2>&1)"
+assert_contains "$BROKEN_OUTPUT" "No package conflicts found."
+
+printf '{broken json' > "$TMP_DIR/broken.json"
+MALFORMED_OUTPUT="$(python3 "$ROOT_DIR/apt/scripts/resolve-conflicts.py" \
+    --rules "$TMP_DIR/broken.json" \
+    --preferences "$PREFS_FILE" \
+    nginx curl 2>&1)"
+assert_contains "$MALFORMED_OUTPUT" "Warning: could not read rules file"
+assert_contains "$MALFORMED_OUTPUT" "No package conflicts found."
+
+INTERACTIVE_OUTPUT="$(printf '1\n' | python3 "$ROOT_DIR/apt/scripts/resolve-conflicts.py" \
     --rules "$RULES_FILE" \
     --preferences "$PREFS_FILE" \
     --interactive \
@@ -74,7 +90,7 @@ INTERACTIVE_OUTPUT="$(printf '1\n' | "$ROOT_DIR/apt/scripts/resolve-conflicts.py
 assert_contains "$INTERACTIVE_OUTPUT" "Select option"
 assert_contains "$INTERACTIVE_OUTPUT" "Saved preference: keep docker.io"
 
-NO_CONFLICT_OUTPUT="$("$ROOT_DIR/apt/scripts/resolve-conflicts.py" \
+NO_CONFLICT_OUTPUT="$(python3 "$ROOT_DIR/apt/scripts/resolve-conflicts.py" \
     --rules "$RULES_FILE" \
     --preferences "$PREFS_FILE" \
     nginx curl)"

@@ -37,9 +37,7 @@ class Conflict:
 def parse_relation_names(value: str) -> set[str]:
     names: set[str] = set()
     for part in value.split(","):
-        match = APT_RELATION_RE.search(part.strip())
-        if match:
-            names.add(match.group(0))
+        names.update(APT_RELATION_RE.findall(part.strip()))
     return names
 
 
@@ -101,8 +99,12 @@ def load_rule_conflicts(path: Path, packages: list[str]) -> list[Conflict]:
     if not path.exists():
         return []
 
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Warning: could not read rules file {path}: {exc}", file=sys.stderr)
+        return []
 
     requested = set(packages)
     found: list[Conflict] = []
@@ -243,7 +245,7 @@ def main(argv: list[str]) -> int:
     preferences = load_preferences(preferences_path)
 
     conflicts = detect_apt_conflicts(args.packages)
-    conflicts.extend(load_rule_conflicts(Path(args.rules), args.packages))
+    conflicts.extend(load_rule_conflicts(Path(args.rules).expanduser(), args.packages))
     conflicts = sorted(
         {conflict.key: conflict for conflict in conflicts}.values(),
         key=lambda item: item.key,
