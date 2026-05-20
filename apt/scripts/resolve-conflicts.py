@@ -80,7 +80,7 @@ def detect_apt_conflicts(packages: list[str]) -> list[Conflict]:
     requested = set(packages)
     conflicts: dict[str, Conflict] = {}
 
-    for package in packages:
+    for package in requested:
         fields = read_apt_fields(package)
         related: set[str] = set()
         for field in ("Conflicts", "Breaks"):
@@ -150,6 +150,11 @@ def save_preference(path: Path, key: str, choice: str) -> None:
     """Persist one saved choice while keeping existing choices."""
     data = load_preferences(path)
     data[key] = choice
+    save_preferences(path, data)
+
+
+def save_preferences(path: Path, data: dict[str, str]) -> None:
+    """Persist all saved choices in one write."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=2, sort_keys=True)
@@ -272,8 +277,8 @@ def main(argv: list[str]) -> int:
             print(f"Choice '{args.choice}' does not match any conflict option.", file=sys.stderr)
             return 2
         for conflict in matching:
-            save_preference(preferences_path, conflict.key, args.choice)
             preferences[conflict.key] = args.choice
+        save_preferences(preferences_path, preferences)
 
     if args.interactive and conflicts:
         preferences.update(prompt_for_choices(conflicts, preferences_path))
