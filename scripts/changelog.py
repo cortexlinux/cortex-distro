@@ -26,6 +26,8 @@ MAINTAINER_RE = re.compile(r"^ -- (?P<maintainer>.+?)\s{2,}(?P<date>.+)$")
 
 @dataclass(frozen=True)
 class ChangelogEntry:
+    """Structured representation of one Debian changelog release block."""
+
     package: str
     version: str
     distribution: str
@@ -36,19 +38,23 @@ class ChangelogEntry:
 
     @property
     def has_security_fix(self) -> bool:
+        """Return whether any recorded change looks security-related."""
         return any(SECURITY_RE.search(change) for change in self.changes)
 
 
 def repo_root() -> Path:
+    """Return the repository root relative to this helper script."""
     return Path(__file__).resolve().parents[1]
 
 
 def default_changelog_path(package: str, root: Path | None = None) -> Path:
+    """Build the conventional local Debian changelog path for a package."""
     base = root or repo_root()
     return base / "packages" / package / "debian" / "changelog"
 
 
 def parse_changelog(text: str) -> list[ChangelogEntry]:
+    """Parse Debian changelog text into newest-first structured entries."""
     entries: list[ChangelogEntry] = []
     current: dict[str, object] | None = None
     changes: list[str] = []
@@ -94,6 +100,7 @@ def parse_changelog(text: str) -> list[ChangelogEntry]:
 
 
 def load_entries(package: str | None, changelog: Path | None = None) -> list[ChangelogEntry]:
+    """Load changelog entries from an explicit file or package default path."""
     path = changelog or (default_changelog_path(package) if package else None)
     if not path:
         raise ValueError("Either package or changelog file must be specified")
@@ -104,6 +111,7 @@ def load_entries(package: str | None, changelog: Path | None = None) -> list[Cha
 
 
 def filter_entries(entries: Iterable[ChangelogEntry], query: str | None = None) -> list[ChangelogEntry]:
+    """Return entries whose version or change text contains the query."""
     entries = list(entries)
     if not query:
         return entries
@@ -112,6 +120,7 @@ def filter_entries(entries: Iterable[ChangelogEntry], query: str | None = None) 
 
 
 def compare_entries(entries: Iterable[ChangelogEntry], older: str, newer: str) -> list[ChangelogEntry]:
+    """Select the contiguous changelog range from newer down to older."""
     materialized = list(entries)
     versions = [entry.version for entry in materialized]
     if older not in versions or newer not in versions:
@@ -132,6 +141,7 @@ def compare_entries(entries: Iterable[ChangelogEntry], older: str, newer: str) -
 
 
 def format_entries(entries: Iterable[ChangelogEntry]) -> str:
+    """Render changelog entries as readable CLI output with security markers."""
     lines: list[str] = []
     for entry in entries:
         marker = "🔐 " if entry.has_security_fix else ""
@@ -144,6 +154,7 @@ def format_entries(entries: Iterable[ChangelogEntry]) -> str:
 
 
 def export_entries(entries: Iterable[ChangelogEntry], output: Path) -> None:
+    """Write entries to JSON, including computed security-fix metadata."""
     data = []
     for entry in entries:
         item = asdict(entry)
@@ -154,6 +165,7 @@ def export_entries(entries: Iterable[ChangelogEntry], output: Path) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Create the changelog viewer command-line parser."""
     parser = argparse.ArgumentParser(description="View/search package changelogs")
     parser.add_argument("package", nargs="?", help="package directory name under packages/")
     parser.add_argument("older", nargs="?", help="older version for compare mode")
@@ -166,6 +178,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the changelog viewer CLI and return a process exit code."""
     args = build_parser().parse_args(argv)
     if not args.package and not args.file:
         build_parser().error("Either package or --file must be specified.")
