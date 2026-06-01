@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 SHELL := /bin/bash
-.PHONY: all iso iso-netinst iso-offline package sbom clean test help
+.PHONY: all iso iso-netinst iso-offline package sbom clean test test-changelog help
 
 # Build configuration
 CODENAME := trixie
@@ -37,6 +37,7 @@ help:
 	@echo "  package PKG=x Build specific package (cx-core, cx-full, cx-archive-keyring)"
 	@echo "  sbom          Generate Software Bill of Materials"
 	@echo "  test          Run build verification tests"
+	@echo "  test-changelog Run changelog viewer unit tests"
 	@echo "  clean         Remove build artifacts"
 	@echo "  deps          Install build dependencies"
 	@echo ""
@@ -157,10 +158,14 @@ sbom:
 # Run tests
 test:
 	@echo -e "$(GREEN)Running build verification tests...$(NC)"
+	python3 -m unittest tests/test_changelog.py
 	./tests/verify-iso.sh $(OUTPUT_DIR)/$(ISO_NAME)-offline.iso || true
 	./tests/verify-packages.sh || true
 	./tests/verify-preseed.sh || true
 	@echo -e "$(GREEN)Tests complete$(NC)"
+
+test-changelog:
+	python3 -m unittest tests/test_changelog.py
 
 # Clean build artifacts
 clean:
