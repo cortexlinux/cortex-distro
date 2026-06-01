@@ -75,7 +75,9 @@ class ChangelogViewerTests(unittest.TestCase):
             output = temp / "out.json"
             source.write_text(SAMPLE_CHANGELOG, encoding="utf-8")
 
-            result = subprocess.run(
+            # Safe in this test: invoke the local helper with a fixed Python executable
+            # and argument list, never a shell-interpreted command string.
+            result = subprocess.run(  # noqa: S603
                 [
                     sys.executable,
                     str(ROOT / "scripts" / "changelog.py"),
@@ -108,7 +110,9 @@ class ChangelogViewerTests(unittest.TestCase):
             source = Path(tempdir) / "changelog"
             source.write_text(SAMPLE_CHANGELOG, encoding="utf-8")
 
-            result = subprocess.run(
+            # Safe in this test: invoke the local helper with a fixed Python executable
+            # and argument list, never a shell-interpreted command string.
+            result = subprocess.run(  # noqa: S603
                 [
                     sys.executable,
                     str(ROOT / "scripts" / "changelog.py"),
