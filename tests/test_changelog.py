@@ -39,12 +39,34 @@ class ChangelogViewerTests(unittest.TestCase):
         self.assertFalse(entries[1].has_security_fix)
         self.assertIn("Container restart issues", entries[0].changes[1])
 
+    def test_parse_dash_bullets_and_extra_maintainer_spacing(self):
+        text = textwrap.dedent(
+            """
+            curl (8.5.0-1) stable; urgency=medium
+
+              - Fix HTTP retry handling.
+
+             -- CX Maintainer <dev@example.com>    Mon, 01 Jan 2024 10:00:00 +0000
+            """
+        ).strip()
+
+        entries = changelog.parse_changelog(text)
+
+        self.assertEqual(entries[0].changes, ("Fix HTTP retry handling.",))
+        self.assertEqual(entries[0].maintainer, "CX Maintainer <dev@example.com>")
+        self.assertEqual(entries[0].date, "Mon, 01 Jan 2024 10:00:00 +0000")
+
     def test_search_and_compare_versions(self):
         entries = changelog.parse_changelog(SAMPLE_CHANGELOG)
 
         self.assertEqual([entry.version for entry in changelog.filter_entries(entries, "BuildKit")], ["24.0.7-1"])
         compared = changelog.compare_entries(entries, "24.0.6-1", "24.0.7-1")
         self.assertEqual([entry.version for entry in compared], ["24.0.7-1", "24.0.6-1"])
+
+        with self.assertRaises(ValueError):
+            changelog.compare_entries(entries, "24.0.5-1", "24.0.7-1")
+        with self.assertRaises(ValueError):
+            changelog.compare_entries(entries, "24.0.7-1", "24.0.6-1")
 
     def test_export_json_and_cli_output(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -57,7 +79,6 @@ class ChangelogViewerTests(unittest.TestCase):
                 [
                     sys.executable,
                     str(ROOT / "scripts" / "changelog.py"),
-                    "docker",
                     "--file",
                     str(source),
                     "--security",
@@ -73,6 +94,37 @@ class ChangelogViewerTests(unittest.TestCase):
             exported = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(len(exported), 1)
             self.assertTrue(exported[0]["has_security_fix"])
+
+    def test_export_creates_parent_directories(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            output = Path(tempdir) / "nested" / "out.json"
+
+            changelog.export_entries(changelog.parse_changelog(SAMPLE_CHANGELOG), output)
+
+            self.assertTrue(output.exists())
+
+    def test_cli_rejects_missing_or_invalid_compare_bounds(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            source = Path(tempdir) / "changelog"
+            source.write_text(SAMPLE_CHANGELOG, encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "changelog.py"),
+                    "docker",
+                    "24.0.5-1",
+                    "24.0.7-1",
+                    "--file",
+                    str(source),
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("compare bounds not found", result.stderr)
 
 
 if __name__ == "__main__":

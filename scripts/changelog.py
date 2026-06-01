@@ -20,8 +20,8 @@ CHANGELOG_HEADER = re.compile(
     r"^(?P<package>[\w.+-]+) \((?P<version>[^)]+)\) (?P<distribution>[^;]+); urgency=(?P<urgency>\S+)"
 )
 SECURITY_RE = re.compile(r"\b(CVE-\d{4}-\d{4,}|security|vulnerab|exploit|privilege|auth)\b", re.I)
-BULLET_RE = re.compile(r"^\s{2,}\*\s?(?P<text>.*)$")
-MAINTAINER_RE = re.compile(r"^ -- (?P<maintainer>.+?)  (?P<date>.+)$")
+BULLET_RE = re.compile(r"^\s{2,}[*-]\s?(?P<text>.*)$")
+MAINTAINER_RE = re.compile(r"^ -- (?P<maintainer>.+?)\s{2,}(?P<date>.+)$")
 
 
 @dataclass(frozen=True)
@@ -93,10 +93,13 @@ def parse_changelog(text: str) -> list[ChangelogEntry]:
     return entries
 
 
-def load_entries(package: str, changelog: Path | None = None) -> list[ChangelogEntry]:
-    path = changelog or default_changelog_path(package)
+def load_entries(package: str | None, changelog: Path | None = None) -> list[ChangelogEntry]:
+    path = changelog or (default_changelog_path(package) if package else None)
+    if not path:
+        raise ValueError("Either package or changelog file must be specified")
     if not path.exists():
-        raise FileNotFoundError(f"No changelog found for {package!r}: {path}")
+        msg = f"No changelog found for {package!r}: {path}" if package else f"No changelog found: {path}"
+        raise FileNotFoundError(msg)
     return parse_changelog(path.read_text(encoding="utf-8"))
 
 
@@ -109,15 +112,22 @@ def filter_entries(entries: Iterable[ChangelogEntry], query: str | None = None) 
 
 
 def compare_entries(entries: Iterable[ChangelogEntry], older: str, newer: str) -> list[ChangelogEntry]:
+    materialized = list(entries)
+    versions = [entry.version for entry in materialized]
+    if older not in versions or newer not in versions:
+        raise ValueError(f"compare bounds not found: older={older!r}, newer={newer!r}")
+
     selected: list[ChangelogEntry] = []
     capture = False
-    for entry in entries:
+    for entry in materialized:
         if entry.version == newer:
             capture = True
         if capture:
             selected.append(entry)
         if entry.version == older:
             break
+    if not selected or selected[-1].version != older:
+        raise ValueError(f"newer version {newer!r} must appear before older version {older!r}")
     return selected
 
 
@@ -139,12 +149,13 @@ def export_entries(entries: Iterable[ChangelogEntry], output: Path) -> None:
         item = asdict(entry)
         item["has_security_fix"] = entry.has_security_fix
         data.append(item)
+    output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="View/search package changelogs")
-    parser.add_argument("package", help="package directory name under packages/")
+    parser.add_argument("package", nargs="?", help="package directory name under packages/")
     parser.add_argument("older", nargs="?", help="older version for compare mode")
     parser.add_argument("newer", nargs="?", help="newer version for compare mode")
     parser.add_argument("--file", type=Path, help="read a specific changelog file")
@@ -156,6 +167,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if not args.package and not args.file:
+        build_parser().error("Either package or --file must be specified.")
     try:
         entries = load_entries(args.package, args.file)
     except FileNotFoundError as exc:
@@ -166,14 +179,22 @@ def main(argv: list[str] | None = None) -> int:
         if not (args.older and args.newer):
             print("compare mode requires both older and newer versions", file=sys.stderr)
             return 2
-        entries = compare_entries(entries, args.older, args.newer)
+        try:
+            entries = compare_entries(entries, args.older, args.newer)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 2
 
     entries = filter_entries(entries, args.search)
     if args.security:
         entries = [entry for entry in entries if entry.has_security_fix]
 
     if args.export:
-        export_entries(entries, args.export)
+        try:
+            export_entries(entries, args.export)
+        except OSError as exc:
+            print(f"failed to export JSON: {exc}", file=sys.stderr)
+            return 2
 
     output = format_entries(entries)
     if output:
