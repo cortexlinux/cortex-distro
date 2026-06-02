@@ -31,7 +31,10 @@ SAMPLE_CHANGELOG = textwrap.dedent(
 
 
 class ChangelogViewerTests(unittest.TestCase):
+    """Regression coverage for the offline Debian changelog viewer."""
+
     def test_parse_entries_and_security_detection(self):
+        """Parse release blocks and mark entries with security-related changes."""
         entries = changelog.parse_changelog(SAMPLE_CHANGELOG)
 
         self.assertEqual([entry.version for entry in entries], ["24.0.7-1", "24.0.6-1"])
@@ -40,6 +43,7 @@ class ChangelogViewerTests(unittest.TestCase):
         self.assertIn("Container restart issues", entries[0].changes[1])
 
     def test_parse_dash_bullets_and_extra_maintainer_spacing(self):
+        """Accept dash bullets and flexible spacing before maintainer dates."""
         text = textwrap.dedent(
             """
             curl (8.5.0-1) stable; urgency=medium
@@ -57,6 +61,7 @@ class ChangelogViewerTests(unittest.TestCase):
         self.assertEqual(entries[0].date, "Mon, 01 Jan 2024 10:00:00 +0000")
 
     def test_search_and_compare_versions(self):
+        """Filter by text and validate compare-mode version bounds."""
         entries = changelog.parse_changelog(SAMPLE_CHANGELOG)
 
         self.assertEqual([entry.version for entry in changelog.filter_entries(entries, "BuildKit")], ["24.0.7-1"])
@@ -69,6 +74,7 @@ class ChangelogViewerTests(unittest.TestCase):
             changelog.compare_entries(entries, "24.0.7-1", "24.0.6-1")
 
     def test_export_json_and_cli_output(self):
+        """Export filtered entries to JSON while keeping readable CLI output."""
         with tempfile.TemporaryDirectory() as tempdir:
             temp = Path(tempdir)
             source = temp / "changelog"
@@ -98,6 +104,7 @@ class ChangelogViewerTests(unittest.TestCase):
             self.assertTrue(exported[0]["has_security_fix"])
 
     def test_export_creates_parent_directories(self):
+        """Create missing parent directories for JSON export targets."""
         with tempfile.TemporaryDirectory() as tempdir:
             output = Path(tempdir) / "nested" / "out.json"
 
@@ -106,6 +113,7 @@ class ChangelogViewerTests(unittest.TestCase):
             self.assertTrue(output.exists())
 
     def test_cli_rejects_missing_or_invalid_compare_bounds(self):
+        """Return a controlled non-zero exit when compare bounds are invalid."""
         with tempfile.TemporaryDirectory() as tempdir:
             source = Path(tempdir) / "changelog"
             source.write_text(SAMPLE_CHANGELOG, encoding="utf-8")

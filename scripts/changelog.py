@@ -60,6 +60,7 @@ def parse_changelog(text: str) -> list[ChangelogEntry]:
     changes: list[str] = []
 
     def flush() -> None:
+        """Persist the current changelog block and reset parser state."""
         nonlocal current, changes
         if not current:
             return
