@@ -180,9 +180,26 @@ make package        # Build all Debian packages
 make package PKG=cx-core  # Build specific package
 make sbom           # Generate SBOM
 make test           # Run verification tests
+make test-changelog # Run changelog viewer unit tests only
 make clean          # Remove build artifacts
 make deps           # Install build dependencies
 ```
+
+## Package changelog viewer
+
+Use the offline changelog helper to inspect Debian package changelogs kept under
+`packages/<package>/debian/changelog`:
+
+```bash
+python3 scripts/changelog.py cx-core
+python3 scripts/changelog.py cx-core --search security
+python3 scripts/changelog.py cx-core --security --export cx-core-security.json
+python3 scripts/changelog.py cx-core 0.1.0-1 0.1.1-1
+```
+
+The viewer formats release notes, searches change text and versions, compares a
+version range, highlights security-related fixes, and can export selected
+entries as JSON for release notes or audit handoff.
 
 ## Topics Covered
 
