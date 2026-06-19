@@ -92,6 +92,26 @@ class ProfileCliTests(unittest.TestCase):
         data = json.loads((isolated / "profiles.json").read_text())
         self.assertEqual(data["profiles"]["imported-dev"]["packages"], ["python3"])
 
+    def test_import_rejects_invalid_package_payload(self):
+        export_path = self.tmp_path / "bad.cx-profile.json"
+        export_path.write_text(
+            json.dumps({"format": "cx-profile", "profile": {"name": "bad", "packages": [123]}}),
+            encoding="utf-8",
+        )
+
+        result = self.run_profile("import", str(export_path))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("must be strings", result.stderr)
+
+    def test_invalid_state_reports_clean_error(self):
+        state_path = self.tmp_path / "profiles.json"
+        state_path.write_text("{not-json", encoding="utf-8")
+
+        result = self.run_profile("list")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Invalid profile state JSON", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
     def test_validation_rejects_bad_profile_and_package_names(self):
         bad_profile = self.run_profile("create", "bad/name")
         self.assertEqual(bad_profile.returncode, 2)

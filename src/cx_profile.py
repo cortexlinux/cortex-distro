@@ -76,7 +76,7 @@ def validate_profile_name(name: str) -> None:
 
 class ProfileStore:
     def __init__(self, path: Path | None = None) -> None:
-        self.path = path or default_state_path()
+        self.path = (path or default_state_path()).expanduser()
         self.state = self._load()
 
     def _load(self) -> dict[str, Any]:
@@ -98,12 +98,13 @@ class ProfileStore:
         return state
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        target = self.path.resolve() if self.path.exists() else self.path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(target.suffix + ".tmp")
         with tmp.open("w", encoding="utf-8") as handle:
             json.dump(self.state, handle, indent=2, sort_keys=True)
             handle.write("\n")
-        tmp.replace(self.path)
+        tmp.replace(target)
 
     @property
     def profiles(self) -> dict[str, Any]:
@@ -212,7 +213,12 @@ class ProfileStore:
         validate_profile_name(imported_name)
         if imported_name in self.profiles:
             raise ProfileError(f"Profile already exists: {imported_name}")
-        packages = normalize_packages([str(package) for package in profile.get("packages", [])])
+        raw_packages = profile.get("packages", [])
+        if not isinstance(raw_packages, list):
+            raise ProfileError("Imported profile 'packages' must be a list")
+        if not all(isinstance(package, str) for package in raw_packages):
+            raise ProfileError("All packages in the imported profile must be strings")
+        packages = normalize_packages(raw_packages)
         created = {
             "name": imported_name,
             "packages": packages,
@@ -307,9 +313,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    store = ProfileStore()
 
     try:
+        store = ProfileStore()
         if args.command == "create":
             profile = store.create(args.name, args.package)
             print(f"Profile '{profile['name']}' created")

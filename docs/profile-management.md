@@ -87,6 +87,8 @@ cortex profile export production ./production.cx-profile.json
 
 - Profile names must be 1-64 characters.
 - Profile names may contain letters, numbers, dot, underscore, and dash.
-- Package names may contain letters, numbers, plus, dot, underscore, colon, and dash.
+- Package names must be 1-128 characters.
+- Package names must start with a letter or number.
+- Package names may then contain letters, numbers, plus, dot, underscore, colon, and dash.
 - Duplicate package names are removed automatically.
 - Import files must use the `cx-profile` export format.
