@@ -36,5 +36,13 @@ override_dh_auto_install:
 	echo 'python3 -m cx.cli "$$@"' >> $(CURDIR)/debian/cx-core/usr/bin/cx
 	chmod 755 $(CURDIR)/debian/cx-core/usr/bin/cx
 
+	# Install local profile manager and command dispatchers.
+	install -m 755 ../../src/cx_profile.py \
+		$(CURDIR)/debian/cx-core/usr/share/cx/cx_profile.py
+	install -m 755 ../../src/cortex \
+		$(CURDIR)/debian/cx-core/usr/bin/cortex
+	ln -sf /usr/share/cx/cx_profile.py \
+		$(CURDIR)/debian/cx-core/usr/bin/cx-profile
+
 override_dh_auto_clean:
 	@echo "No clean step required"

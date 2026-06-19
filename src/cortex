@@ -1,0 +1,35 @@
+#!/bin/bash
+# CX Linux command dispatcher.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROFILE_CLI="$SCRIPT_DIR/cx_profile.py"
+if [[ ! -f "$PROFILE_CLI" && -f /usr/share/cx/cx_profile.py ]]; then
+  PROFILE_CLI="/usr/share/cx/cx_profile.py"
+fi
+
+case "${1:-}" in
+  profile)
+    shift
+    exec python3 "$PROFILE_CLI" "$@"
+    ;;
+  ""|-h|--help|help)
+    cat <<'EOF'
+Usage: cortex <command> [args]
+
+Commands:
+  profile    Manage package installation profiles
+
+Examples:
+  cortex profile create development --package nodejs --package python3
+  cortex profile active
+  cortex profile switch production
+EOF
+    ;;
+  *)
+    echo "Unknown cortex command: $1" >&2
+    echo "Run 'cortex --help' for usage." >&2
+    exit 2
+    ;;
+esac
