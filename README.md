@@ -106,6 +106,24 @@ Everything in cx-core plus:
 - GPU support prerequisites
 - Modern CLI tools (htop, btop, fzf, ripgrep, bat)
 
+### Named Package Profiles
+
+CX can save named package installation profiles for repeatable environment
+switching:
+
+```bash
+cortex profile create development --package nodejs --package python3 --package docker.io
+cortex profile copy development production
+cortex profile edit production --remove nodejs --add nginx --add certbot
+cortex profile diff development production
+cortex profile switch production
+```
+
+Profiles support creation, validation, active-profile switching, version history,
+and JSON import/export for sharing. See
+[docs/profile-management.md](docs/profile-management.md) for the full command
+reference and examples.
+
 ## Automated Installation
 
 CX Linux supports fully unattended installation via preseed:
