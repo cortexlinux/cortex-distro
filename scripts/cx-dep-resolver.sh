@@ -70,7 +70,7 @@ normalize_alt() {
 
 candidate_exists() {
     local package="$1"
-    "$APT_CACHE_BIN" policy "$package" 2>/dev/null | awk '/Candidate:/ {print $2; found=1} END {exit !found}' | grep -vq "(none)"
+    "$APT_CACHE_BIN" policy "$package" 2>/dev/null | awk '/Candidate:/ { found = ($2 && $2 != "(none)"); exit } END { exit !found }'
 }
 
 print_dependency_tree() {
@@ -90,13 +90,17 @@ print_dependency_tree() {
         return 0
     fi
 
-    "$APT_CACHE_BIN" depends "$package" 2>/dev/null |
+    local dependencies=()
+    while read -r dependency; do
+        dependencies+=("$dependency")
+    done < <("$APT_CACHE_BIN" depends "$package" 2>/dev/null |
         awk '/^[[:space:]]*(PreDepends|Depends):/ {print $2}' |
         sed 's/[<>|]//g' |
-        awk 'NF && !seen[$0]++' |
-        while read -r dependency; do
-            print_dependency_tree "$dependency" "$((depth - 1))" "$indent  " "${seen},${package}"
-        done
+        awk 'NF && !seen[$0]++' || true)
+
+    for dependency in "${dependencies[@]}"; do
+        print_dependency_tree "$dependency" "$((depth - 1))" "$indent  " "${seen},${package}"
+    done
 }
 
 print_plain_english_summary() {
@@ -148,7 +152,7 @@ print_alternatives() {
     if [[ "$prefix" != "$package" && -n "$prefix" ]]; then
         alternatives=$("$APT_CACHE_BIN" search "^${prefix}" 2>/dev/null |
             awk '{print $1}' |
-            grep -v "^${package}$" |
+            grep -Fvx "${package}" |
             head -10 || true)
     fi
 
@@ -185,7 +189,11 @@ packages=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --tree-depth)
-            tree_depth="${2:-}"
+            if [[ $# -lt 2 ]]; then
+                bad "Option --tree-depth requires an argument"
+                exit 2
+            fi
+            tree_depth="$2"
             shift 2
             ;;
         --no-color)
@@ -250,7 +258,7 @@ done
 simulation="$("$APT_GET_BIN" -s install "${packages[@]}" 2>&1 || true)"
 removals="$(grep -E '^(Remv|The following packages will be REMOVED:)' <<<"$simulation" || true)"
 held="$(grep -Ei 'held|kept back|changed held' <<<"$simulation" || true)"
-broken="$(grep -Ei 'broken packages|unmet dependencies|conflicts with|but it is not going to be installed' <<<"$simulation" || true)"
+broken="$(grep -Ei 'broken packages|unmet dependencies|conflicts with|but it is not going to be installed|^E:' <<<"$simulation" || true)"
 
 printf "\nDependency tree:\n"
 for package in "${packages[@]}"; do

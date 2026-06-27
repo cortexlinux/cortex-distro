@@ -104,9 +104,9 @@ if PATH="$TMP_DIR:$PATH" \
     APT_CACHE_BIN="$TMP_DIR/apt-cache" \
     APT_MARK_BIN="$TMP_DIR/apt-mark" \
     DPKG_QUERY_BIN="$TMP_DIR/dpkg-query" \
-    "$ROOT_DIR/scripts/cx-dep-resolver.sh" --no-color danger-package >/tmp/cx-dep-danger.log 2>&1; then
+    "$ROOT_DIR/scripts/cx-dep-resolver.sh" --no-color danger-package >"$TMP_DIR/cx-dep-danger.log" 2>&1; then
     echo "Expected resolver to fail when apt simulation removes packages" >&2
-    cat /tmp/cx-dep-danger.log >&2
+    cat "$TMP_DIR/cx-dep-danger.log" >&2
     exit 1
 fi
 
@@ -115,9 +115,9 @@ if PATH="$TMP_DIR:$PATH" \
     APT_CACHE_BIN="$TMP_DIR/apt-cache" \
     APT_MARK_BIN="$TMP_DIR/apt-mark" \
     DPKG_QUERY_BIN="$TMP_DIR/dpkg-query" \
-    "$ROOT_DIR/scripts/cx-dep-resolver.sh" --no-color missing-package >/tmp/cx-dep-missing.log 2>&1; then
+    "$ROOT_DIR/scripts/cx-dep-resolver.sh" --no-color missing-package >"$TMP_DIR/cx-dep-missing.log" 2>&1; then
     echo "Expected resolver to fail when no candidate exists" >&2
-    cat /tmp/cx-dep-missing.log >&2
+    cat "$TMP_DIR/cx-dep-missing.log" >&2
     exit 1
 fi
 
