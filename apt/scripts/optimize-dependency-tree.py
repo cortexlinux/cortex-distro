@@ -97,7 +97,7 @@ def read_stanzas(path: Path) -> list[dict[str, str]]:
                 current_key = None
                 continue
 
-            if line.startswith(" ") and current_key:
+            if line.startswith((" ", "\t")) and current_key:
                 current[current_key] = f"{current[current_key]}\n{line.strip()}"
                 continue
 
@@ -126,6 +126,8 @@ def package_from_stanza(stanza: dict[str, str]) -> Package | None:
         value for key in ("Pre-Depends", "Depends") if (value := stanza.get(key))
     )
 
+    description_lines = stanza.get("Description", "").splitlines()
+
     return Package(
         name=name,
         version=stanza.get("Version", ""),
@@ -133,7 +135,7 @@ def package_from_stanza(stanza: dict[str, str]) -> Package | None:
         depends=parse_dependency_groups(dependency_text),
         conflicts=parse_name_set(", ".join(stanza.get(key, "") for key in ("Conflicts", "Breaks"))),
         provides=parse_name_set(stanza.get("Provides", "")),
-        description=stanza.get("Description", "").splitlines()[0],
+        description=description_lines[0] if description_lines else "",
     )
 
 
@@ -151,7 +153,6 @@ def default_index_paths(repo_root: Path) -> list[Path]:
 def load_packages(repo_root: Path, indexes: list[Path]) -> tuple[dict[str, Package], dict[str, list[str]]]:
     paths = indexes or default_index_paths(repo_root)
     by_name: dict[str, Package] = {}
-    providers: dict[str, list[str]] = {}
     seen_paths: set[Path] = set()
 
     for path in paths:
@@ -170,8 +171,11 @@ def load_packages(repo_root: Path, indexes: list[Path]) -> tuple[dict[str, Packa
             if existing and existing.installed_size <= package.installed_size:
                 continue
             by_name[package.name] = package
-            for provided in package.provides:
-                providers.setdefault(provided, []).append(package.name)
+
+    providers: dict[str, list[str]] = {}
+    for package in by_name.values():
+        for provided in package.provides:
+            providers.setdefault(provided, []).append(package.name)
 
     return by_name, providers
 
@@ -189,23 +193,32 @@ def estimate_closure_size(
     packages: dict[str, Package],
     providers: dict[str, list[str]],
     seen: frozenset[str],
+    memo: dict[tuple[str, frozenset[str]], int],
 ) -> int:
+    cache_key = (name, seen)
+    if cache_key in memo:
+        return memo[cache_key]
+
     candidates = candidate_names(name, packages, providers)
     if not candidates:
-        return sys.maxsize // 4
+        memo[cache_key] = sys.maxsize // 4
+        return memo[cache_key]
 
     best = sys.maxsize // 4
     for candidate in candidates:
         if candidate in seen:
-            return 0
+            memo[cache_key] = 0
+            return memo[cache_key]
         package = packages[candidate]
         total = package.installed_size
         next_seen = seen | {candidate}
         for group in package.depends:
             total += min(
-                estimate_closure_size(option, packages, providers, next_seen) for option in group
+                estimate_closure_size(option, packages, providers, next_seen, memo)
+                for option in group
             )
         best = min(best, total)
+    memo[cache_key] = best
     return best
 
 
@@ -214,11 +227,14 @@ def pick_dependency(
     packages: dict[str, Package],
     providers: dict[str, list[str]],
     seen: frozenset[str],
+    memo: dict[tuple[str, frozenset[str]], int],
 ) -> str | None:
     scored: list[tuple[int, str]] = []
     for alternative in alternatives:
         for candidate in candidate_names(alternative, packages, providers):
-            scored.append((estimate_closure_size(candidate, packages, providers, seen), candidate))
+            scored.append(
+                (estimate_closure_size(candidate, packages, providers, seen, memo), candidate)
+            )
     if not scored:
         return None
     return min(scored)[1]
@@ -230,6 +246,7 @@ def resolve_targets(
     providers: dict[str, list[str]],
 ) -> Resolution:
     resolution = Resolution(selected={}, edges={}, missing=[], conflicts=[], roots={})
+    closure_size_memo: dict[tuple[str, frozenset[str]], int] = {}
 
     def add_package(name: str, parent: str | None = None, stack: frozenset[str] = frozenset()) -> None:
         candidates = candidate_names(name, packages, providers)
@@ -239,7 +256,13 @@ def resolve_targets(
 
         package_name = min(
             candidates,
-            key=lambda candidate: estimate_closure_size(candidate, packages, providers, stack),
+            key=lambda candidate: estimate_closure_size(
+                candidate,
+                packages,
+                providers,
+                stack,
+                closure_size_memo,
+            ),
         )
         if parent is None:
             resolution.roots[name] = package_name
@@ -254,7 +277,7 @@ def resolve_targets(
         next_stack = stack | {package_name}
 
         for group in package.depends:
-            picked = pick_dependency(group, packages, providers, next_stack)
+            picked = pick_dependency(group, packages, providers, next_stack, closure_size_memo)
             if not picked:
                 resolution.missing.append(f"{package_name} -> {' | '.join(group)}")
                 continue
@@ -270,22 +293,29 @@ def resolve_targets(
 def detect_conflicts(resolution: Resolution) -> None:
     selected = resolution.selected
     selected_names = set(selected)
-    virtuals = {provided for package in selected.values() for provided in package.provides}
-    selected_or_provided = selected_names | virtuals
+    provided_by: dict[str, set[str]] = {}
+    for package in selected.values():
+        for provided in package.provides:
+            provided_by.setdefault(provided, set()).add(package.name)
 
     for package in selected.values():
-        for conflict in sorted(package.conflicts & selected_or_provided):
-            resolution.conflicts.append(f"{package.name} conflicts with {conflict}")
+        for conflict in sorted(package.conflicts):
+            if conflict in (selected_names - {package.name}):
+                resolution.conflicts.append(f"{package.name} conflicts with {conflict}")
+                continue
+            other_providers = provided_by.get(conflict, set()) - {package.name}
+            if other_providers:
+                resolution.conflicts.append(f"{package.name} conflicts with {conflict}")
 
 
-def print_tree(name: str, edges: dict[str, list[str]], indent: str, seen: set[str]) -> None:
+def print_tree(name: str, edges: dict[str, list[str]], indent: str, path: frozenset[str]) -> None:
     print(f"{indent}- {name}")
-    if name in seen:
+    if name in path:
         print(f"{indent}  (cycle skipped)")
         return
-    seen.add(name)
+    next_path = path | {name}
     for child in sorted(dict.fromkeys(edges.get(name, []))):
-        print_tree(child, edges, f"{indent}  ", seen)
+        print_tree(child, edges, f"{indent}  ", next_path)
 
 
 def print_dot(resolution: Resolution) -> None:
@@ -318,7 +348,7 @@ def print_summary(targets: list[str], resolution: Resolution, show_dot: bool) ->
     print("Dependency tree:")
     for target in targets:
         root = resolution.roots.get(target, target)
-        print_tree(root, resolution.edges, "", set())
+        print_tree(root, resolution.edges, "", frozenset())
     print()
 
     if resolution.missing:
