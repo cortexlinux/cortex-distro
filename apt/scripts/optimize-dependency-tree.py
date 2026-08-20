@@ -25,6 +25,8 @@ ARCH_RE = re.compile(r":(?:any|native|[a-z0-9-]+)$")
 
 @dataclass(frozen=True)
 class Package:
+    """Normalized package metadata extracted from an APT Packages stanza."""
+
     name: str
     version: str
     installed_size: int
@@ -36,6 +38,8 @@ class Package:
 
 @dataclass
 class Resolution:
+    """Dependency resolution result, including selected packages and diagnostics."""
+
     selected: dict[str, Package]
     edges: dict[str, list[str]]
     missing: list[str]
@@ -44,16 +48,19 @@ class Resolution:
 
     @property
     def total_size(self) -> int:
+        """Return the sum of Installed-Size values for selected packages."""
         return sum(package.installed_size for package in self.selected.values())
 
 
 def normalize_package_name(value: str) -> str:
+    """Strip version constraints and architecture qualifiers from a dependency token."""
     value = VERSION_RE.sub("", value).strip()
     value = ARCH_RE.sub("", value)
     return value.strip()
 
 
 def parse_dependency_groups(value: str) -> tuple[tuple[str, ...], ...]:
+    """Parse Depends/Pre-Depends text into comma groups with pipe alternatives."""
     groups: list[tuple[str, ...]] = []
     for group in DEP_SPLIT_RE.split(value):
         alternatives = tuple(
@@ -67,6 +74,7 @@ def parse_dependency_groups(value: str) -> tuple[tuple[str, ...], ...]:
 
 
 def parse_name_set(value: str) -> frozenset[str]:
+    """Parse a comma/pipe separated relationship field into normalized names."""
     names: set[str] = set()
     for group in DEP_SPLIT_RE.split(value):
         for item in ALT_SPLIT_RE.split(group):
@@ -77,12 +85,14 @@ def parse_name_set(value: str) -> frozenset[str]:
 
 
 def open_index(path: Path):
+    """Open either a plain Packages file or a gzipped Packages.gz index."""
     if path.suffix == ".gz":
         return gzip.open(path, "rt", encoding="utf-8", errors="replace")
     return path.open("r", encoding="utf-8", errors="replace")
 
 
 def read_stanzas(path: Path) -> list[dict[str, str]]:
+    """Read Debian control stanzas, preserving folded continuation lines."""
     stanzas: list[dict[str, str]] = []
     current: dict[str, str] = {}
     current_key: str | None = None
@@ -113,6 +123,7 @@ def read_stanzas(path: Path) -> list[dict[str, str]]:
 
 
 def package_from_stanza(stanza: dict[str, str]) -> Package | None:
+    """Convert one Packages stanza into a Package, skipping malformed entries."""
     name = stanza.get("Package", "")
     if not name:
         return None
@@ -140,6 +151,7 @@ def package_from_stanza(stanza: dict[str, str]) -> Package | None:
 
 
 def default_index_paths(repo_root: Path) -> list[Path]:
+    """Discover Packages indexes below dists/, preferring plain files over gzip twins."""
     dists = repo_root / "dists"
     if not dists.exists():
         return []
@@ -151,6 +163,7 @@ def default_index_paths(repo_root: Path) -> list[Path]:
 
 
 def load_packages(repo_root: Path, indexes: list[Path]) -> tuple[dict[str, Package], dict[str, list[str]]]:
+    """Load package metadata and virtual-package provider mappings from indexes."""
     paths = indexes or default_index_paths(repo_root)
     by_name: dict[str, Package] = {}
     seen_paths: set[Path] = set()
@@ -181,6 +194,7 @@ def load_packages(repo_root: Path, indexes: list[Path]) -> tuple[dict[str, Packa
 
 
 def candidate_names(name: str, packages: dict[str, Package], providers: dict[str, list[str]]) -> list[str]:
+    """Return real packages that satisfy a requested package or virtual name."""
     names: list[str] = []
     if name in packages:
         names.append(name)
@@ -195,6 +209,7 @@ def estimate_closure_size(
     seen: frozenset[str],
     memo: dict[tuple[str, frozenset[str]], int],
 ) -> int:
+    """Estimate the minimal Installed-Size closure for selecting a package name."""
     cache_key = (name, seen)
     if cache_key in memo:
         return memo[cache_key]
@@ -229,6 +244,7 @@ def pick_dependency(
     seen: frozenset[str],
     memo: dict[tuple[str, frozenset[str]], int],
 ) -> str | None:
+    """Choose the smallest satisfiable option from a dependency alternative group."""
     scored: list[tuple[int, str]] = []
     for alternative in alternatives:
         for candidate in candidate_names(alternative, packages, providers):
@@ -245,10 +261,12 @@ def resolve_targets(
     packages: dict[str, Package],
     providers: dict[str, list[str]],
 ) -> Resolution:
+    """Resolve target packages into a minimal dependency closure plus diagnostics."""
     resolution = Resolution(selected={}, edges={}, missing=[], conflicts=[], roots={})
     closure_size_memo: dict[tuple[str, frozenset[str]], int] = {}
 
     def add_package(name: str, parent: str | None = None, stack: frozenset[str] = frozenset()) -> None:
+        """Add one dependency and recursively expand its selected dependency choices."""
         candidates = candidate_names(name, packages, providers)
         if not candidates:
             resolution.missing.append(name if parent is None else f"{parent} -> {name}")
@@ -291,6 +309,7 @@ def resolve_targets(
 
 
 def detect_conflicts(resolution: Resolution) -> None:
+    """Populate conflict diagnostics for selected packages and provided virtual names."""
     selected = resolution.selected
     selected_names = set(selected)
     provided_by: dict[str, set[str]] = {}
@@ -309,6 +328,7 @@ def detect_conflicts(resolution: Resolution) -> None:
 
 
 def print_tree(name: str, edges: dict[str, list[str]], indent: str, path: frozenset[str]) -> None:
+    """Print a dependency tree, avoiding infinite recursion on cycles."""
     print(f"{indent}- {name}")
     if name in path:
         print(f"{indent}  (cycle skipped)")
@@ -319,6 +339,7 @@ def print_tree(name: str, edges: dict[str, list[str]], indent: str, path: frozen
 
 
 def print_dot(resolution: Resolution) -> None:
+    """Print the selected dependency graph in Graphviz DOT format."""
     print("digraph dependencies {")
     print('  rankdir="LR";')
     for name in sorted(resolution.selected):
@@ -330,6 +351,7 @@ def print_dot(resolution: Resolution) -> None:
 
 
 def print_summary(targets: list[str], resolution: Resolution, show_dot: bool) -> None:
+    """Print a human-readable dependency plan and optional graph output."""
     print("Optimized dependency plan")
     print("=========================")
     print(f"Targets: {', '.join(targets)}")
@@ -371,6 +393,7 @@ def print_summary(targets: list[str], resolution: Resolution, show_dot: bool) ->
 
 
 def main(argv: list[str]) -> int:
+    """Parse CLI arguments, run dependency resolution, and return a process status."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("packages", nargs="+", help="Target package names or virtual packages")
     parser.add_argument("--repo-root", type=Path, default=Path.cwd(), help="APT repository root")
