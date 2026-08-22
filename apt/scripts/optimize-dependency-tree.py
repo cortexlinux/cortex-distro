@@ -19,8 +19,20 @@ from pathlib import Path
 
 DEP_SPLIT_RE = re.compile(r"\s*,\s*")
 ALT_SPLIT_RE = re.compile(r"\s*\|\s*")
-VERSION_RE = re.compile(r"\s*\([^)]*\)")
+RELATION_RE = re.compile(
+    r"^\s*([a-z0-9+.-]+(?::(?:any|native|[a-z0-9-]+))?)"
+    r"(?:\s*\((<<|<=|=|>=|>>)\s*([^)]+)\))?\s*$"
+)
 ARCH_RE = re.compile(r":(?:any|native|[a-z0-9-]+)$")
+
+
+@dataclass(frozen=True)
+class Requirement:
+    """Package or virtual-package relationship requested by an APT field."""
+
+    name: str
+    operator: str = ""
+    version: str = ""
 
 
 @dataclass(frozen=True)
@@ -30,9 +42,9 @@ class Package:
     name: str
     version: str
     installed_size: int
-    depends: tuple[tuple[str, ...], ...]
-    conflicts: frozenset[str]
-    provides: frozenset[str]
+    depends: tuple[tuple[Requirement, ...], ...]
+    conflicts: frozenset[Requirement]
+    provides: frozenset[Requirement]
     description: str
 
 
@@ -53,35 +65,45 @@ class Resolution:
 
 
 def normalize_package_name(value: str) -> str:
-    """Strip version constraints and architecture qualifiers from a dependency token."""
-    value = VERSION_RE.sub("", value).strip()
-    value = ARCH_RE.sub("", value)
-    return value.strip()
+    """Strip architecture qualifiers from a package or virtual package name."""
+    return ARCH_RE.sub("", value).strip()
 
 
-def parse_dependency_groups(value: str) -> tuple[tuple[str, ...], ...]:
+def parse_requirement(value: str) -> Requirement | None:
+    """Parse a Debian package relationship token into name, operator, and version."""
+    match = RELATION_RE.match(value)
+    if not match:
+        name = normalize_package_name(value)
+        return Requirement(name) if name else None
+    name, operator, version = match.groups()
+    return Requirement(normalize_package_name(name), operator or "", version or "")
+
+
+def parse_dependency_groups(value: str) -> tuple[tuple[Requirement, ...], ...]:
     """Parse Depends/Pre-Depends text into comma groups with pipe alternatives."""
-    groups: list[tuple[str, ...]] = []
+    groups: list[tuple[Requirement, ...]] = []
     for group in DEP_SPLIT_RE.split(value):
         alternatives = tuple(
-            name
-            for name in (normalize_package_name(item) for item in ALT_SPLIT_RE.split(group))
-            if name
+            requirement
+            for requirement in (
+                parse_requirement(item) for item in ALT_SPLIT_RE.split(group)
+            )
+            if requirement
         )
         if alternatives:
             groups.append(alternatives)
     return tuple(groups)
 
 
-def parse_name_set(value: str) -> frozenset[str]:
+def parse_requirement_set(value: str) -> frozenset[Requirement]:
     """Parse a comma/pipe separated relationship field into normalized names."""
-    names: set[str] = set()
+    requirements: set[Requirement] = set()
     for group in DEP_SPLIT_RE.split(value):
         for item in ALT_SPLIT_RE.split(group):
-            name = normalize_package_name(item)
-            if name:
-                names.add(name)
-    return frozenset(names)
+            requirement = parse_requirement(item)
+            if requirement:
+                requirements.add(requirement)
+    return frozenset(requirements)
 
 
 def open_index(path: Path):
@@ -144,8 +166,10 @@ def package_from_stanza(stanza: dict[str, str]) -> Package | None:
         version=stanza.get("Version", ""),
         installed_size=installed_size,
         depends=parse_dependency_groups(dependency_text),
-        conflicts=parse_name_set(", ".join(stanza.get(key, "") for key in ("Conflicts", "Breaks"))),
-        provides=parse_name_set(stanza.get("Provides", "")),
+        conflicts=parse_requirement_set(
+            ", ".join(stanza.get(key, "") for key in ("Conflicts", "Breaks"))
+        ),
+        provides=parse_requirement_set(stanza.get("Provides", "")),
         description=description_lines[0] if description_lines else "",
     )
 
@@ -162,10 +186,12 @@ def default_index_paths(repo_root: Path) -> list[Path]:
     return plain + gz
 
 
-def load_packages(repo_root: Path, indexes: list[Path]) -> tuple[dict[str, Package], dict[str, list[str]]]:
+def load_packages(
+    repo_root: Path, indexes: list[Path]
+) -> tuple[dict[str, list[Package]], dict[str, list[tuple[Package, Requirement]]]]:
     """Load package metadata and virtual-package provider mappings from indexes."""
     paths = indexes or default_index_paths(repo_root)
-    by_name: dict[str, Package] = {}
+    by_name: dict[str, list[Package]] = {}
     seen_paths: set[Path] = set()
 
     for path in paths:
@@ -180,129 +206,369 @@ def load_packages(repo_root: Path, indexes: list[Path]) -> tuple[dict[str, Packa
             package = package_from_stanza(stanza)
             if not package:
                 continue
-            existing = by_name.get(package.name)
-            if existing and existing.installed_size <= package.installed_size:
-                continue
-            by_name[package.name] = package
+            by_name.setdefault(package.name, []).append(package)
 
-    providers: dict[str, list[str]] = {}
-    for package in by_name.values():
+    for versions in by_name.values():
+        versions.sort(key=lambda package: (package.installed_size, package.version))
+
+    providers: dict[str, list[tuple[Package, Requirement]]] = {}
+    for versions in by_name.values():
+        if not versions:
+            continue
+        package = versions[0]
         for provided in package.provides:
-            providers.setdefault(provided, []).append(package.name)
+            providers.setdefault(provided.name, []).append((package, provided))
+
+    for provided_packages in providers.values():
+        provided_packages.sort(key=lambda item: (item[0].installed_size, item[0].name))
 
     return by_name, providers
 
 
-def candidate_names(name: str, packages: dict[str, Package], providers: dict[str, list[str]]) -> list[str]:
+def debian_version_compare(left: str, right: str) -> int:
+    """Compare two Debian package versions using Debian Policy ordering rules."""
+
+    def split_epoch(version: str) -> tuple[int, str]:
+        epoch_text, separator, rest = version.partition(":")
+        if separator and epoch_text.isdigit():
+            return int(epoch_text), rest
+        return 0, version
+
+    def split_revision(version: str) -> tuple[str, str]:
+        upstream, separator, revision = version.rpartition("-")
+        if separator:
+            return upstream, revision
+        return version, "0"
+
+    def char_order(char: str) -> int:
+        if not char:
+            return 0
+        if char == "~":
+            return -1
+        if char.isalpha():
+            return ord(char)
+        return ord(char) + 256
+
+    def compare_part(left_part: str, right_part: str) -> int:
+        left_index = right_index = 0
+        while left_index < len(left_part) or right_index < len(right_part):
+            while (
+                left_index < len(left_part) and not left_part[left_index].isdigit()
+            ) or (
+                right_index < len(right_part) and not right_part[right_index].isdigit()
+            ):
+                left_char = left_part[left_index] if left_index < len(left_part) else ""
+                right_char = (
+                    right_part[right_index] if right_index < len(right_part) else ""
+                )
+                order_delta = char_order(left_char) - char_order(right_char)
+                if order_delta:
+                    return -1 if order_delta < 0 else 1
+                if left_index < len(left_part):
+                    left_index += 1
+                if right_index < len(right_part):
+                    right_index += 1
+
+            left_digit_start = left_index
+            right_digit_start = right_index
+            while left_index < len(left_part) and left_part[left_index].isdigit():
+                left_index += 1
+            while right_index < len(right_part) and right_part[right_index].isdigit():
+                right_index += 1
+
+            left_digits = left_part[left_digit_start:left_index].lstrip("0")
+            right_digits = right_part[right_digit_start:right_index].lstrip("0")
+            if len(left_digits) != len(right_digits):
+                return -1 if len(left_digits) < len(right_digits) else 1
+            if left_digits != right_digits:
+                return -1 if left_digits < right_digits else 1
+
+        return 0
+
+    left_epoch, left_rest = split_epoch(left)
+    right_epoch, right_rest = split_epoch(right)
+    if left_epoch != right_epoch:
+        return -1 if left_epoch < right_epoch else 1
+
+    left_upstream, left_revision = split_revision(left_rest)
+    right_upstream, right_revision = split_revision(right_rest)
+    upstream_result = compare_part(left_upstream, right_upstream)
+    if upstream_result:
+        return upstream_result
+    return compare_part(left_revision, right_revision)
+
+
+def version_satisfies(
+    candidate_version: str, operator: str, required_version: str
+) -> bool:
+    """Return whether a candidate version satisfies a Debian relationship."""
+    if not operator:
+        return True
+    comparison = debian_version_compare(candidate_version, required_version)
+    return {
+        "<<": comparison < 0,
+        "<=": comparison <= 0,
+        "=": comparison == 0,
+        ">=": comparison >= 0,
+        ">>": comparison > 0,
+    }[operator]
+
+
+def package_satisfies(requirement: Requirement, package: Package) -> bool:
+    """Return whether a real package satisfies a requested relationship."""
+    return package.name == requirement.name and version_satisfies(
+        package.version, requirement.operator, requirement.version
+    )
+
+
+def provider_satisfies(requirement: Requirement, provided: Requirement) -> bool:
+    """Return whether a Provides relationship satisfies a virtual package request."""
+    if provided.name != requirement.name:
+        return False
+    if not requirement.operator:
+        return True
+    if not provided.version:
+        return False
+    return version_satisfies(provided.version, requirement.operator, requirement.version)
+
+
+def selected_package_for(
+    requirement: Requirement, selected: dict[str, Package]
+) -> Package | None:
+    """Return the selected package satisfying a real or virtual requirement."""
+    package = selected.get(requirement.name)
+    if package and package_satisfies(requirement, package):
+        return package
+    for package in selected.values():
+        for provided in package.provides:
+            if provider_satisfies(requirement, provided):
+                return package
+    return None
+
+
+def candidate_packages(
+    requirement: Requirement,
+    packages: dict[str, list[Package]],
+    providers: dict[str, list[tuple[Package, Requirement]]],
+) -> list[Package]:
     """Return real packages that satisfy a requested package or virtual name."""
-    names: list[str] = []
-    if name in packages:
-        names.append(name)
-    names.extend(providers.get(name, []))
-    return sorted(dict.fromkeys(names), key=lambda item: packages[item].installed_size)
+    candidates: list[Package] = [
+        package
+        for package in packages.get(requirement.name, [])
+        if package_satisfies(requirement, package)
+    ]
+    candidates.extend(
+        package
+        for package, provided in providers.get(requirement.name, [])
+        if provider_satisfies(requirement, provided)
+    )
+
+    by_name: dict[str, Package] = {}
+    for package in sorted(candidates, key=lambda item: (item.installed_size, item.name)):
+        by_name.setdefault(package.name, package)
+    return list(by_name.values())
 
 
-def estimate_closure_size(
-    name: str,
-    packages: dict[str, Package],
-    providers: dict[str, list[str]],
-    seen: frozenset[str],
-    memo: dict[tuple[str, frozenset[str]], int],
-) -> int:
-    """Estimate the minimal Installed-Size closure for selecting a package name."""
-    cache_key = (name, seen)
+@dataclass(frozen=True)
+class Estimate:
+    """Estimated marginal cost and selected closure for one dependency choice."""
+
+    cost: int
+    selected: dict[str, Package]
+    package: Package | None
+
+
+def requirement_text(requirement: Requirement) -> str:
+    """Render a dependency relationship for diagnostics."""
+    if not requirement.operator:
+        return requirement.name
+    return f"{requirement.name} ({requirement.operator} {requirement.version})"
+
+
+def selected_cache_key(selected: dict[str, Package]) -> tuple[tuple[str, str], ...]:
+    """Build a stable cache key for the current selected package versions."""
+    return tuple(sorted((name, package.version) for name, package in selected.items()))
+
+
+def estimate_package_closure(
+    package: Package,
+    packages: dict[str, list[Package]],
+    providers: dict[str, list[tuple[Package, Requirement]]],
+    selected: dict[str, Package],
+    ancestors: frozenset[str],
+    memo: dict[tuple[Requirement, tuple[tuple[str, str], ...], frozenset[str]], Estimate],
+) -> Estimate:
+    """Estimate marginal cost for adding a package and its dependencies."""
+    if package.name in ancestors:
+        return Estimate(0, selected, package)
+
+    next_selected = dict(selected)
+    cost = 0
+    existing = next_selected.get(package.name)
+    if not existing or existing.version != package.version:
+        cost = package.installed_size
+        next_selected[package.name] = package
+
+    next_ancestors = ancestors | {package.name}
+    for group in package.depends:
+        estimates = [
+            estimate_requirement_closure(
+                requirement, packages, providers, next_selected, next_ancestors, memo
+            )
+            for requirement in group
+        ]
+        best = min(
+            estimates,
+            key=lambda estimate: (
+                estimate.cost,
+                estimate.package.name if estimate.package else "",
+            ),
+        )
+        cost += best.cost
+        next_selected = best.selected
+
+    return Estimate(cost, next_selected, package)
+
+
+def estimate_requirement_closure(
+    requirement: Requirement,
+    packages: dict[str, list[Package]],
+    providers: dict[str, list[tuple[Package, Requirement]]],
+    selected: dict[str, Package],
+    ancestors: frozenset[str],
+    memo: dict[tuple[Requirement, tuple[tuple[str, str], ...], frozenset[str]], Estimate],
+) -> Estimate:
+    """Estimate the marginal closure for satisfying a package relationship."""
+    selected_package = selected_package_for(requirement, selected)
+    if selected_package:
+        return Estimate(0, selected, selected_package)
+
+    cache_key = (requirement, selected_cache_key(selected), ancestors)
     if cache_key in memo:
         return memo[cache_key]
 
-    candidates = candidate_names(name, packages, providers)
+    candidates = candidate_packages(requirement, packages, providers)
     if not candidates:
-        memo[cache_key] = sys.maxsize // 4
-        return memo[cache_key]
+        result = Estimate(sys.maxsize // 4, selected, None)
+        memo[cache_key] = result
+        return result
 
-    best = sys.maxsize // 4
-    for candidate in candidates:
-        if candidate in seen:
-            memo[cache_key] = 0
-            return memo[cache_key]
-        package = packages[candidate]
-        total = package.installed_size
-        next_seen = seen | {candidate}
-        for group in package.depends:
-            total += min(
-                estimate_closure_size(option, packages, providers, next_seen, memo)
-                for option in group
+    result = min(
+        (
+            estimate_package_closure(
+                candidate, packages, providers, selected, ancestors, memo
             )
-        best = min(best, total)
-    memo[cache_key] = best
-    return best
+            for candidate in candidates
+        ),
+        key=lambda estimate: (
+            estimate.cost,
+            estimate.package.name if estimate.package else "",
+        ),
+    )
+    memo[cache_key] = result
+    return result
 
 
 def pick_dependency(
-    alternatives: tuple[str, ...],
-    packages: dict[str, Package],
-    providers: dict[str, list[str]],
+    alternatives: tuple[Requirement, ...],
+    packages: dict[str, list[Package]],
+    providers: dict[str, list[tuple[Package, Requirement]]],
+    selected: dict[str, Package],
     seen: frozenset[str],
-    memo: dict[tuple[str, frozenset[str]], int],
-) -> str | None:
+    memo: dict[tuple[Requirement, tuple[tuple[str, str], ...], frozenset[str]], Estimate],
+) -> Requirement | None:
     """Choose the smallest satisfiable option from a dependency alternative group."""
-    scored: list[tuple[int, str]] = []
-    for alternative in alternatives:
-        for candidate in candidate_names(alternative, packages, providers):
-            scored.append(
-                (estimate_closure_size(candidate, packages, providers, seen, memo), candidate)
-            )
+    scored = [
+        (
+            estimate_requirement_closure(
+                alternative, packages, providers, selected, seen, memo
+            ).cost,
+            requirement_text(alternative),
+            alternative,
+        )
+        for alternative in alternatives
+        if candidate_packages(alternative, packages, providers)
+        or selected_package_for(alternative, selected)
+    ]
     if not scored:
         return None
-    return min(scored)[1]
+    return min(scored)[2]
 
 
 def resolve_targets(
     targets: list[str],
-    packages: dict[str, Package],
-    providers: dict[str, list[str]],
+    packages: dict[str, list[Package]],
+    providers: dict[str, list[tuple[Package, Requirement]]],
 ) -> Resolution:
     """Resolve target packages into a minimal dependency closure plus diagnostics."""
     resolution = Resolution(selected={}, edges={}, missing=[], conflicts=[], roots={})
-    closure_size_memo: dict[tuple[str, frozenset[str]], int] = {}
+    closure_size_memo: dict[
+        tuple[Requirement, tuple[tuple[str, str], ...], frozenset[str]], Estimate
+    ] = {}
 
-    def add_package(name: str, parent: str | None = None, stack: frozenset[str] = frozenset()) -> None:
+    def add_package(
+        requirement: Requirement,
+        parent: str | None = None,
+        stack: frozenset[str] = frozenset(),
+    ) -> None:
         """Add one dependency and recursively expand its selected dependency choices."""
-        candidates = candidate_names(name, packages, providers)
-        if not candidates:
-            resolution.missing.append(name if parent is None else f"{parent} -> {name}")
+        selected_package = selected_package_for(requirement, resolution.selected)
+        if selected_package:
+            if parent:
+                resolution.edges.setdefault(parent, []).append(selected_package.name)
+            elif requirement.name not in resolution.roots:
+                resolution.roots[requirement.name] = selected_package.name
             return
 
-        package_name = min(
+        candidates = candidate_packages(requirement, packages, providers)
+        if not candidates:
+            missing = requirement_text(requirement)
+            resolution.missing.append(
+                missing if parent is None else f"{parent} -> {missing}"
+            )
+            return
+
+        package = min(
             candidates,
-            key=lambda candidate: estimate_closure_size(
+            key=lambda candidate: estimate_package_closure(
                 candidate,
                 packages,
                 providers,
+                dict(resolution.selected),
                 stack,
                 closure_size_memo,
-            ),
+            ).cost,
         )
         if parent is None:
-            resolution.roots[name] = package_name
+            resolution.roots[requirement.name] = package.name
         if parent:
-            resolution.edges.setdefault(parent, []).append(package_name)
+            resolution.edges.setdefault(parent, []).append(package.name)
 
-        if package_name in stack or package_name in resolution.selected:
+        if package.name in stack or package.name in resolution.selected:
             return
 
-        package = packages[package_name]
-        resolution.selected[package_name] = package
-        next_stack = stack | {package_name}
+        resolution.selected[package.name] = package
+        next_stack = stack | {package.name}
 
         for group in package.depends:
-            picked = pick_dependency(group, packages, providers, next_stack, closure_size_memo)
+            picked = pick_dependency(
+                group,
+                packages,
+                providers,
+                dict(resolution.selected),
+                next_stack,
+                closure_size_memo,
+            )
             if not picked:
-                resolution.missing.append(f"{package_name} -> {' | '.join(group)}")
+                resolution.missing.append(
+                    f"{package.name} -> "
+                    f"{' | '.join(requirement_text(item) for item in group)}"
+                )
                 continue
-            add_package(picked, package_name, next_stack)
+            add_package(picked, package.name, next_stack)
 
     for target in targets:
-        add_package(target)
+        add_package(Requirement(target))
 
     detect_conflicts(resolution)
     return resolution
@@ -311,20 +577,20 @@ def resolve_targets(
 def detect_conflicts(resolution: Resolution) -> None:
     """Populate conflict diagnostics for selected packages and provided virtual names."""
     selected = resolution.selected
-    selected_names = set(selected)
-    provided_by: dict[str, set[str]] = {}
-    for package in selected.values():
-        for provided in package.provides:
-            provided_by.setdefault(provided, set()).add(package.name)
 
     for package in selected.values():
-        for conflict in sorted(package.conflicts):
-            if conflict in (selected_names - {package.name}):
-                resolution.conflicts.append(f"{package.name} conflicts with {conflict}")
-                continue
-            other_providers = provided_by.get(conflict, set()) - {package.name}
-            if other_providers:
-                resolution.conflicts.append(f"{package.name} conflicts with {conflict}")
+        for conflict in sorted(package.conflicts, key=requirement_text):
+            for other in selected.values():
+                if other.name == package.name:
+                    continue
+                if package_satisfies(conflict, other) or any(
+                    provider_satisfies(conflict, provided)
+                    for provided in other.provides
+                ):
+                    resolution.conflicts.append(
+                        f"{package.name} conflicts with {requirement_text(conflict)}"
+                    )
+                    break
 
 
 def print_tree(name: str, edges: dict[str, list[str]], indent: str, path: frozenset[str]) -> None:

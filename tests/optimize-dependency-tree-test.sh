@@ -95,6 +95,62 @@ Package: diamond-shared
 Version: 1.0
 Installed-Size: 1
 Description: shared dependency
+
+Package: versioned-root
+Version: 1.0
+Installed-Size: 1
+Depends: versioned-lib (>= 2.0)
+Description: package requiring a newer direct dependency
+
+Package: versioned-lib
+Version: 1.0
+Installed-Size: 1
+Description: incompatible older direct dependency
+
+Package: versioned-lib
+Version: 2.0
+Installed-Size: 20
+Description: compatible newer direct dependency
+
+Package: virtual-version-root
+Version: 1.0
+Installed-Size: 1
+Depends: virtual-api (>= 2.0)
+Description: package requiring a versioned virtual dependency
+
+Package: provider-old
+Version: 1.0
+Installed-Size: 1
+Provides: virtual-api (= 1.0)
+Description: incompatible virtual provider
+
+Package: provider-new
+Version: 1.0
+Installed-Size: 20
+Provides: virtual-api (= 2.0)
+Description: compatible virtual provider
+
+Package: marginal-root
+Version: 1.0
+Installed-Size: 1
+Depends: shared-parent, shared-runtime | tiny-alt
+Description: root with sibling dependencies sharing a runtime
+
+Package: shared-parent
+Version: 1.0
+Installed-Size: 1
+Depends: shared-runtime
+Description: parent that already pulls the shared runtime
+
+Package: shared-runtime
+Version: 1.0
+Installed-Size: 100
+Description: large runtime shared by siblings
+
+Package: tiny-alt
+Version: 1.0
+Installed-Size: 60
+Description: smaller standalone alternative before deduplication
 EOF
 
 gzip -c "$INDEX" > "$GZ_INDEX"
@@ -169,6 +225,19 @@ assert_contains "$(cat "$TMP_DIR/stale-provider.out")" "Missing dependencies:"
 output="$(run_optimizer diamond-root)"
 assert_contains "$output" "diamond-shared 1.0"
 assert_not_contains "$output" "(cycle skipped)"
+
+output="$(run_optimizer versioned-root)"
+assert_contains "$output" "versioned-lib 2.0"
+assert_not_contains "$output" "versioned-lib 1.0"
+
+output="$(run_optimizer virtual-version-root)"
+assert_contains "$output" "provider-new 1.0"
+assert_not_contains "$output" "provider-old 1.0"
+
+output="$(run_optimizer marginal-root)"
+assert_contains "$output" "Total Installed-Size: 102 KiB"
+assert_contains "$output" "shared-runtime 1.0"
+assert_not_contains "$output" "tiny-alt 1.0"
 
 if run_optimizer cx-demo conflict-tool > "$TMP_DIR/conflict.out" 2>&1; then
     echo "Expected conflicting plan to fail" >&2
