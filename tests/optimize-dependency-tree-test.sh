@@ -112,6 +112,22 @@ Version: 2.0
 Installed-Size: 20
 Description: compatible newer direct dependency
 
+Package: ordered-version-root
+Version: 1.0
+Installed-Size: 1
+Depends: ordered-version-lib (>= 2.0)
+Description: package requiring a newer direct dependency listed before an older one
+
+Package: ordered-version-lib
+Version: 2.0
+Installed-Size: 20
+Description: compatible direct dependency listed first
+
+Package: ordered-version-lib
+Version: 1.0
+Installed-Size: 1
+Description: incompatible older direct dependency listed last
+
 Package: virtual-version-root
 Version: 1.0
 Installed-Size: 1
@@ -129,6 +145,45 @@ Version: 1.0
 Installed-Size: 20
 Provides: virtual-api (= 2.0)
 Description: compatible virtual provider
+
+Package: same-provider-root
+Version: 1.0
+Installed-Size: 1
+Depends: same-virtual (>= 2.0)
+Description: package requiring a virtual dependency provided by a later version
+
+Package: same-provider
+Version: 1.0
+Installed-Size: 1
+Description: smaller same-name package without the virtual provide
+
+Package: same-provider
+Version: 2.0
+Installed-Size: 20
+Provides: same-virtual (= 2.0)
+Description: larger same-name package with the versioned virtual provide
+
+Package: duplicate-alt-root
+Version: 1.0
+Installed-Size: 1
+Depends: shared-lib | shared-lib
+Description: root with duplicate alternatives
+
+Package: digit-letter-root
+Version: 1.0
+Installed-Size: 1
+Depends: digit-letter-lib (<< 1.a)
+Description: root with a dependency that compares digits against non-digits
+
+Package: digit-letter-lib
+Version: 1.2
+Installed-Size: 1
+Description: version whose digit segment sorts before the letter segment
+
+Package: digit-letter-lib
+Version: 1.a
+Installed-Size: 20
+Description: version whose letter segment sorts after the digit segment
 
 Package: marginal-root
 Version: 1.0
@@ -230,9 +285,24 @@ output="$(run_optimizer versioned-root)"
 assert_contains "$output" "versioned-lib 2.0"
 assert_not_contains "$output" "versioned-lib 1.0"
 
+output="$(run_optimizer ordered-version-root)"
+assert_contains "$output" "ordered-version-lib 2.0"
+assert_not_contains "$output" "ordered-version-lib 1.0"
+
 output="$(run_optimizer virtual-version-root)"
 assert_contains "$output" "provider-new 1.0"
 assert_not_contains "$output" "provider-old 1.0"
+
+output="$(run_optimizer same-provider-root)"
+assert_contains "$output" "same-provider 2.0"
+assert_not_contains "$output" "same-provider 1.0"
+
+output="$(run_optimizer duplicate-alt-root)"
+assert_contains "$output" "shared-lib 2.0"
+
+output="$(run_optimizer digit-letter-root)"
+assert_contains "$output" "digit-letter-lib 1.2"
+assert_not_contains "$output" "digit-letter-lib 1.a"
 
 output="$(run_optimizer marginal-root)"
 assert_contains "$output" "Total Installed-Size: 102 KiB"

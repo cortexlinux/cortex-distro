@@ -213,14 +213,14 @@ def load_packages(
 
     providers: dict[str, list[tuple[Package, Requirement]]] = {}
     for versions in by_name.values():
-        if not versions:
-            continue
-        package = versions[0]
-        for provided in package.provides:
-            providers.setdefault(provided.name, []).append((package, provided))
+        for package in versions:
+            for provided in package.provides:
+                providers.setdefault(provided.name, []).append((package, provided))
 
     for provided_packages in providers.values():
-        provided_packages.sort(key=lambda item: (item[0].installed_size, item[0].name))
+        provided_packages.sort(
+            key=lambda item: (item[0].installed_size, item[0].name, item[0].version)
+        )
 
     return by_name, providers
 
@@ -252,22 +252,25 @@ def debian_version_compare(left: str, right: str) -> int:
     def compare_part(left_part: str, right_part: str) -> int:
         left_index = right_index = 0
         while left_index < len(left_part) or right_index < len(right_part):
-            while (
-                left_index < len(left_part) and not left_part[left_index].isdigit()
-            ) or (
-                right_index < len(right_part) and not right_part[right_index].isdigit()
-            ):
-                left_char = left_part[left_index] if left_index < len(left_part) else ""
+            left_non_digit_start = left_index
+            right_non_digit_start = right_index
+            while left_index < len(left_part) and not left_part[left_index].isdigit():
+                left_index += 1
+            while right_index < len(right_part) and not right_part[right_index].isdigit():
+                right_index += 1
+
+            left_non_digits = left_part[left_non_digit_start:left_index]
+            right_non_digits = right_part[right_non_digit_start:right_index]
+            for offset in range(max(len(left_non_digits), len(right_non_digits))):
+                left_char = (
+                    left_non_digits[offset] if offset < len(left_non_digits) else ""
+                )
                 right_char = (
-                    right_part[right_index] if right_index < len(right_part) else ""
+                    right_non_digits[offset] if offset < len(right_non_digits) else ""
                 )
                 order_delta = char_order(left_char) - char_order(right_char)
                 if order_delta:
                     return -1 if order_delta < 0 else 1
-                if left_index < len(left_part):
-                    left_index += 1
-                if right_index < len(right_part):
-                    right_index += 1
 
             left_digit_start = left_index
             right_digit_start = right_index
@@ -357,14 +360,17 @@ def candidate_packages(
         for package in packages.get(requirement.name, [])
         if package_satisfies(requirement, package)
     ]
-    candidates.extend(
-        package
-        for package, provided in providers.get(requirement.name, [])
-        if provider_satisfies(requirement, provided)
-    )
+    for package, provided in providers.get(requirement.name, []):
+        default_package = packages.get(package.name, [None])[0]
+        if not requirement.operator and package != default_package:
+            continue
+        if provider_satisfies(requirement, provided):
+            candidates.append(package)
 
     by_name: dict[str, Package] = {}
-    for package in sorted(candidates, key=lambda item: (item.installed_size, item.name)):
+    for package in sorted(
+        candidates, key=lambda item: (item.installed_size, item.name, item.version)
+    ):
         by_name.setdefault(package.name, package)
     return list(by_name.values())
 
@@ -385,9 +391,9 @@ def requirement_text(requirement: Requirement) -> str:
     return f"{requirement.name} ({requirement.operator} {requirement.version})"
 
 
-def selected_cache_key(selected: dict[str, Package]) -> tuple[tuple[str, str], ...]:
+def selected_cache_key(selected: dict[str, Package]) -> frozenset[tuple[str, str]]:
     """Build a stable cache key for the current selected package versions."""
-    return tuple(sorted((name, package.version) for name, package in selected.items()))
+    return frozenset((name, package.version) for name, package in selected.items())
 
 
 def estimate_package_closure(
@@ -396,7 +402,7 @@ def estimate_package_closure(
     providers: dict[str, list[tuple[Package, Requirement]]],
     selected: dict[str, Package],
     ancestors: frozenset[str],
-    memo: dict[tuple[Requirement, tuple[tuple[str, str], ...], frozenset[str]], Estimate],
+    memo: dict[tuple[Requirement, frozenset[tuple[str, str]], frozenset[str]], Estimate],
 ) -> Estimate:
     """Estimate marginal cost for adding a package and its dependencies."""
     if package.name in ancestors:
@@ -436,7 +442,7 @@ def estimate_requirement_closure(
     providers: dict[str, list[tuple[Package, Requirement]]],
     selected: dict[str, Package],
     ancestors: frozenset[str],
-    memo: dict[tuple[Requirement, tuple[tuple[str, str], ...], frozenset[str]], Estimate],
+    memo: dict[tuple[Requirement, frozenset[tuple[str, str]], frozenset[str]], Estimate],
 ) -> Estimate:
     """Estimate the marginal closure for satisfying a package relationship."""
     selected_package = selected_package_for(requirement, selected)
@@ -475,7 +481,7 @@ def pick_dependency(
     providers: dict[str, list[tuple[Package, Requirement]]],
     selected: dict[str, Package],
     seen: frozenset[str],
-    memo: dict[tuple[Requirement, tuple[tuple[str, str], ...], frozenset[str]], Estimate],
+    memo: dict[tuple[Requirement, frozenset[tuple[str, str]], frozenset[str]], Estimate],
 ) -> Requirement | None:
     """Choose the smallest satisfiable option from a dependency alternative group."""
     scored = [
@@ -484,15 +490,16 @@ def pick_dependency(
                 alternative, packages, providers, selected, seen, memo
             ).cost,
             requirement_text(alternative),
+            index,
             alternative,
         )
-        for alternative in alternatives
+        for index, alternative in enumerate(alternatives)
         if candidate_packages(alternative, packages, providers)
         or selected_package_for(alternative, selected)
     ]
     if not scored:
         return None
-    return min(scored)[2]
+    return min(scored)[3]
 
 
 def resolve_targets(
@@ -503,7 +510,7 @@ def resolve_targets(
     """Resolve target packages into a minimal dependency closure plus diagnostics."""
     resolution = Resolution(selected={}, edges={}, missing=[], conflicts=[], roots={})
     closure_size_memo: dict[
-        tuple[Requirement, tuple[tuple[str, str], ...], frozenset[str]], Estimate
+        tuple[Requirement, frozenset[tuple[str, str]], frozenset[str]], Estimate
     ] = {}
 
     def add_package(
