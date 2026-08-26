@@ -172,18 +172,40 @@ Description: root with duplicate alternatives
 Package: digit-letter-root
 Version: 1.0
 Installed-Size: 1
-Depends: digit-letter-lib (<< 1.a)
-Description: root with a dependency that compares digits against non-digits
+Depends: digit-letter-lib (<< 1.0)
+Description: root with a dependency that compares tilde versions using Debian ordering
 
 Package: digit-letter-lib
-Version: 1.2
+Version: 1.0
 Installed-Size: 1
-Description: version whose digit segment sorts before the letter segment
+Description: final version that sorts lexically before the release candidate
 
 Package: digit-letter-lib
-Version: 1.a
+Version: 1.0~rc1
 Installed-Size: 20
-Description: version whose letter segment sorts after the digit segment
+Description: release candidate that sorts before the final version in Debian ordering
+
+Package: closure-version-root
+Version: 1.0
+Installed-Size: 1
+Depends: closure-version-lib
+Description: root where a larger package version has a smaller dependency closure
+
+Package: closure-version-lib
+Version: 1.0
+Installed-Size: 1
+Depends: closure-heavy-runtime
+Description: smaller package version with a large dependency
+
+Package: closure-version-lib
+Version: 2.0
+Installed-Size: 20
+Description: larger package version with no extra dependency
+
+Package: closure-heavy-runtime
+Version: 1.0
+Installed-Size: 100
+Description: large transitive dependency for the older version
 
 Package: marginal-root
 Version: 1.0
@@ -301,8 +323,13 @@ output="$(run_optimizer duplicate-alt-root)"
 assert_contains "$output" "shared-lib 2.0"
 
 output="$(run_optimizer digit-letter-root)"
-assert_contains "$output" "digit-letter-lib 1.2"
-assert_not_contains "$output" "digit-letter-lib 1.a"
+assert_contains "$output" "digit-letter-lib 1.0~rc1"
+assert_not_contains "$output" "digit-letter-lib 1.0 (1 KiB)"
+
+output="$(run_optimizer closure-version-root)"
+assert_contains "$output" "closure-version-lib 2.0"
+assert_not_contains "$output" "closure-version-lib 1.0"
+assert_not_contains "$output" "closure-heavy-runtime 1.0"
 
 output="$(run_optimizer marginal-root)"
 assert_contains "$output" "Total Installed-Size: 102 KiB"

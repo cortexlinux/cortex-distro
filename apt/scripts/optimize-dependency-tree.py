@@ -367,12 +367,12 @@ def candidate_packages(
         if provider_satisfies(requirement, provided):
             candidates.append(package)
 
-    by_name: dict[str, Package] = {}
+    by_version: dict[tuple[str, str], Package] = {}
     for package in sorted(
         candidates, key=lambda item: (item.installed_size, item.name, item.version)
     ):
-        by_name.setdefault(package.name, package)
-    return list(by_name.values())
+        by_version.setdefault((package.name, package.version), package)
+    return list(by_version.values())
 
 
 @dataclass(frozen=True)
